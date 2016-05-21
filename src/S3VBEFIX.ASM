@@ -87,63 +87,75 @@ realint10:
             org     resident_start
 int10:
 newint10id  dw  "fK"
-; some pointers for structures
-saveAX      dw      ?
-saveBX      dw      ?
-saveCX      dw      ?
-saveDX      dw      ?
             ; resident entry point
 newint10:
             ; save original ax\bx\cx\dx
             mov     [cs:saveAX], ax
-            mov     [cs:saveBX], bx
-            mov     [cs:saveCX], cx
-            mov     [cs:saveDX], dx
+            ;mov     [cs:saveBX], bx
+            ;mov     [cs:saveCX], cx
+            ;mov     [cs:saveDX], dx
         
             ; check for calling function and doing some conditional branch magic
             ; should be used for patching arguments before INT10h call
         
             ; call original handler
             pushf
+            ; here is a trick - since fasm doesn't support org as "move assembly
+            ; pointer" we need to build our instruction "by hand"
             db  0x9A ; call dword ?:?
 int10ofs    dw  ?
 int10seg    dw  ?
 
             ; do the patch (NB: some regs were changed so keep in mind)
-            cmp     byte [cs:saveAX+1], 0
+            push    ax
+            ; and once again this trick (fffuck!)
+            db      0xB8    ; mov ax, ?
+saveAX      dw      ?
+
+            test    ah, 0
             jz      fix_fifo_fetch
         
 done_iret:
             ; all done, do the IRET
+            pop     ax
             iret
         
+unlock_extensions:
+            ; unlock S3 extensions
+            ; input: dx = 0x3D4
+            mov    ax, 0x4838
+            out    dx, ax
+            mov    ax, 0xA539
+            out    dx, ax
+            ret
+lock_extensions:
+            ; lock S3 extensions
+            ; input: dx = 0x3D4
+            mov    ax, 0x0038
+            out    dx, ax
+            mov    ax, 0x0039
+            out    dx, ax
+            ret
+            
             ; vga function 0x0 - fix primary stream fifo fetch bug
 fix_fifo_fetch:
             push   ax
             push   dx
         
             mov    dx, 0x3D4
-        
-            ; unlock S3 extensions
-            mov    ax, 0x4838
-            out    dx, ax
-            mov    ax, 0xA039
-            out    dx, ax
-        
-            ; fix primary stream fifo fetch.
+            
+            call   unlock_extensions
+            
             mov    al, 0x90
             out    dx, al
             inc    dl
             in     al, dx
             and    al, 0x7F
-            out    dx, al   ; disable it (currently, should work)
-        
-            ; lock S3 extensions
-            mov    ax, 0x0038
-            out    dx, ax
-            mov    ax, 0x0039
-            out    dx, ax
-        
+            out    dx, al   ; disable fetch
+            dec    dl
+            
+            call   lock_extensions
+            
             pop    dx
             pop    ax
         
