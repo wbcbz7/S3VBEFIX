@@ -166,11 +166,11 @@ patchedmode dw      ?
             jnz     done_iret
             
             cmp     al, 0x0     ; Function 00h - Return VBE Controller Information
-            jz      patch_modetable
+            jz      patch_vbeinfo
             cmp     al, 0x1     ; Function 01h - Get VBE Mode Information
             jz      patch_modeinfo
             cmp     al, 0x2     ; Function 02h - Set VBE Mode
-            jz      patch_modeheight
+            jz      patch_modeset
 
 done_iret:
             ; all done, reset inTSR flag and quit from ISR
@@ -185,7 +185,7 @@ done_2:
             iret
 
 ; PATCHERS!1!11 YARRRRRRRRRR!1!!
-; input:  AX, BX - function numbers; DX - patched VESA mode number (for VESA patchers)
+; input:  AX, BX, CX - parameters; DX - patched VESA mode number (for VESA patchers)
 ;         DS - TSR code segment; other regs - passed from previous INT10h handler
 ; output: none (not supported yet)
 ; what you can change: AX, BX, CX, DX; others - don't forget about push\pop!
@@ -225,16 +225,23 @@ fix_fetch:
             
             jmp     done_iret
             
-            ; VESA function 0x0 - set out mode table pointer
-patch_modetable:
+            ; VESA function 0x0 patch
+patch_vbeinfo:
             mov     ax, cs
             mov     word [es:di + VbeInfoBlock.VideoModePtr + 2], ax
             mov     ax, mode_table
             mov     word [es:di + VbeInfoBlock.VideoModePtr    ], ax
             
+            mov     ax, [fakememsize] 
+            test    ax, ax
+            jz      done_iret
+            
+            ; override memory size
+            mov    [es:di + VbeInfoBlock.TotalMemory], ax
+            
             jmp     done_iret
             
-            ; VESA function 0x1 - patch mode info for 400 pixels height
+            ; VESA function 0x1 patch
 patch_modeinfo:
             ; check for modenum is patched
             cmp     cx, dx
@@ -254,8 +261,8 @@ patch_modeinfo:
             
             jmp     done_iret
             
-            ; VESA function 0x2 - set scanline height to 1 
-patch_modeheight:
+            ; VESA function 0x2 patch
+patch_modeset:
             ; check for modenum < 0x100
             cmp     bx, 0x100
             jb      fix_fetch
@@ -297,61 +304,102 @@ patch_mode:
             
 
 ; mode number patch table (filled by transient path)
-; formmat - [src_modenum], [dst_modenum], ... , 0xFF
+; format - [src_modenum], [dst_modenum], ... , 0xFF
 ; only low bytes are stored
 mode_xlat   db      (10*2 + 1) dup 0xFF  ; for security reasons
 ; so why (10*2) + 1? :) well because we can have 320x(200\240) 8\15\16\24\32bpp
 ; and we need to expand 'em all (+ termination byte ofcourse)
 
+; additional vars
+fakememsize dw      0 ; fake memory size (set via /Mx, 0 - BIOS default)
+
 ; VESA mode table starts here (with dynamic size)
 mode_table:
 newint10end:
 
+;--------------------------------------------------------------------------------------------------
 ; START OF TRANSIENT PART
                 org     realint10 + (newint10end - int10)
 init:
                 push    cs
                 pop     ds
-                xor     bp, bp                ; will be used later
+                xor     bp, bp              ; will be used later
                 
                 mov     ah, 9
                 mov     dx, info_str
                 int     21h
                 mov     dx, dash_str
-                int     21h                   ; display our message
+                int     21h                 ; display our message
                 
                 mov     ax, 3510h
-                int     21h                   ; get int10h vector
+                int     21h                 ; get int10h vector
                 
                 cmp     word [es:bx - (newint10 - newint10id)], "fK"  ; check for signature
                 jnz     parse
-                inc     bp                    ; if already installed
+                inc     bp                  ; if already installed
 parse:
+                ; зануляем часть переменных
+                xor     ax, ax
+                mov     [memsize_temp], ax
+                
                 ; parse command line
                 mov     si, 80h
                 lodsb
                 or      al, al
-                jz      no_params             ; empty commandline
+                jz      no_params           ; empty commandline
                 
                 movzx   cx, al
 @parse_loop:
                 lodsb
-                cmp     al, "?"               ; help
+                cmp     al, "?"             ; help
                 jz      help
-                cmp     al, 40h               ; spaces, slashes and other stuff
+                cmp     al, 40h             ; spaces, slashes and other stuff
                 jb      @gottaloop
-                cmp     al, 5Fh               ; a-z
+                cmp     al, 5Fh             ; a-z
                 jb      @skip_upcase
-                sub     al, 20h               ; upcase these symbols
+                sub     al, 20h             ; upcase these symbols
 @skip_upcase:
-                cmp     al, "U"               ; release
+                cmp     al, "U"             ; release
                 jz      release
-                cmp     al, "R"               ; release
+                cmp     al, "R"             ; release
                 jz      release
-@gottaloop:     loop    @parse_loop           ; else gotta loop
+                cmp     al, "M"             ; override memory size
+                jnz     @gottaloop
+                call    fakememsize_parse
+                jcxz    no_params
+@gottaloop:     loop    @parse_loop         ; else gotta loop
 no_params:
-                jmp     build                 ; empty or invalid commandline
+                jmp     build               ; empty or invalid commandline
                 
+fakememsize_parse:
+                dec     cx
+                jcxz    no_params
+                
+                push    bx
+                ; get BCD number - new memory size
+                xor     ah, ah
+                xor     dx, dx
+                mov     bx, 10              ; multiplier          
+@fakememsize_loop:
+                imul    dx, bx              ; dx *= 10    
+                lodsb
+                cmp     al, 0x3A            ; blabla :)
+                ja      @fakememsize_gottaloop
+                cmp     al, 0x30            ; end or invalid param
+                jb      @fakememsize_end          
+                ; else we have char in '0' - '9' range
+                sub     al, 0x30
+                add     dx, ax
+@fakememsize_gottaloop:
+                loop    @fakememsize_loop
+                
+@fakememsize_end:
+                pop     bx
+                ;we got a number, store it :)
+                mov     [memsize_temp], dx
+                inc     [cs:reset_flag]
+                ret
+
 build:
                 ; build it! :)
                 mov     ah, 9
@@ -363,12 +411,15 @@ build:
                 mov     dx, installed_str
                 int     21h
                 call    install
+                call    reset_vars
                 call    hujak_info
                 jmp     install_done
                 
 installed:
                 cmp     [cs:reset_flag], 0
                 jz      already               ; already installed
+                call    reset_vars
+                mov     ah, 9
                 mov     dx, reset_str
                 int     21h
                 jmp     done
@@ -456,10 +507,17 @@ install:
                 
                 ret
 ;----
+; ставим те переменные которые меняются
+reset_vars:
+                ; set memory size
+                mov     ax, [cs:memsize_temp]
+                mov     [es:fakememsize], ax
+                
+                ret
 
 ; set mode number patching and mode number table
-; если оно заработает, я буду ржать :D
 hujak_info:
+
                 ; get vbe info block
                 mov     di, vbeinfo_transient
                 mov     ax, 0x4F00
@@ -539,9 +597,12 @@ reset_str       db      "reset$"
 released_str    db      "released$"
 relfail_str     db      "unable to release$"
 help_str        db      "help",10,13
-                db      "/U      - release from memory$"
+                db      "/M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)",10,13
+                db      "/R, /U  - release from memory$"
 reset_flag      db      0
+memsize_temp    dw      0
 
 ; some place for mode info block (will be used for initialization)
 vbeinfo_transient:
-;modeinfo_transient      equ     $ + 512
+
+; некоторые временные переменные - будут переписаны vesa инфой
