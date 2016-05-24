@@ -116,22 +116,29 @@ newint10:
             cmp     ah, 0x4F
             jnz     @invoke
             ; check for VESA calls to patch mode number
-            cmp     al, 0x1     ; Function 01h  - Get VBE Mode Information
-            jnz     @@not_this
             mov     si, mode_xlat
+            
+            cmp     al, 0x1     ; Function 01h  - Get VBE Mode Information
+            jnz     @@f2
+            ; replace mode number
             push    bx
             mov     bx, cx
             call    patch_mode
             mov     [patchedmode], bx
             mov     cx, bx
             pop     bx
-            jmp     @invoke
-@@not_this:
+@@f2:
             cmp     al, 0x2     ; Function 02h  - Set VBE Mode
-            jnz     @invoke
-            mov     si, mode_xlat
+            jnz     @@f7
+            ; replace mode number
             call    patch_mode
             mov     [patchedmode], bx
+@@f7:
+            cmp     al, 0x7     ; Function 07h - Set/Get Display Start
+            jnz     @invoke
+            ; clear "wait for retrace" flag
+            ;and     bl, 0x7F
+            ;or      bl, 0x00
             
 @invoke:
             ; call original handler
@@ -243,6 +250,43 @@ patch_vbeinfo:
             
             ; VESA function 0x1 patch
 patch_modeinfo:
+            ; check for overriden memsize
+            mov     ax, [fakememsize] 
+            test    ax, ax
+            jz      @modenum_check
+            
+            push    cx
+            push    dx
+            
+            ; warning - 32bit regs inside! :)
+            movzx   ebx, word [es:di + ModeInfoBlock.BytesPerScanLine]
+            movzx   ecx, word [es:di + ModeInfoBlock.YResolution]
+            
+            imul    ebx, ecx        ; page size in bytes
+            add     ebx, 0xFFFF     ; ceil(ebx)
+            shr     ebx, 16         ; page size in 64kb blocks (inaccurate but who cares? :)
+            
+            xor     dx, dx
+            idiv    bx              ; ax - number of pages
+            
+            pop     dx
+            pop     cx
+            
+            test    ax, ax          ; numofpages = 0?
+            jz      @not_avail      ; mode is not available in fact
+            
+            ; if avail - set new pages value
+            dec     al
+            mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
+            jmp     @modenum_check
+            
+@not_avail:            
+            ; set "not supported" flag
+            mov     ax, [es:di + ModeInfoBlock.ModeAttributes]
+            and     ax, 0xFFFE
+            mov     [es:di + ModeInfoBlock.ModeAttributes], ax
+            
+@modenum_check:
             ; check for modenum is patched
             cmp     cx, dx
             jz      done_iret
@@ -364,10 +408,9 @@ parse:
                 cmp     al, "R"             ; release
                 jz      release
                 cmp     al, "M"             ; override memory size
-                jnz     @gottaloop
-                call    fakememsize_parse
-                jcxz    no_params
-@gottaloop:     loop    @parse_loop         ; else gotta loop
+                jz      fakememsize_parse
+@gottaloop:     jcxz    no_params
+                loop    @parse_loop         ; else gotta loop
 no_params:
                 jmp     build               ; empty or invalid commandline
                 
@@ -398,7 +441,7 @@ fakememsize_parse:
                 ;we got a number, store it :)
                 mov     [memsize_temp], dx
                 inc     [cs:reset_flag]
-                ret
+                jmp     @gottaloop
 
 build:
                 ; build it! :)
