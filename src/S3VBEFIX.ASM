@@ -137,8 +137,11 @@ newint10:
             cmp     al, 0x7     ; Function 07h - Set/Get Display Start
             jnz     @invoke
             ; clear "wait for retrace" flag
-            ;and     bl, 0x7F
-            ;or      bl, 0x00
+            db      0x82, 0xCB  ; or bl, ?
+sds_or      db      0x00
+            db      0x82, 0xE3  ; and bl, ?
+sds_and     db      0xFF
+
             
 @invoke:
             ; call original handler
@@ -385,6 +388,8 @@ parse:
                 ; зануляем часть переменных
                 xor     ax, ax
                 mov     [memsize_temp], ax
+                mov     ax, 0xFF00
+                mov     [sds_mask], ax
                 
                 ; parse command line
                 mov     si, 80h
@@ -409,6 +414,8 @@ parse:
                 jz      release
                 cmp     al, "M"             ; override memory size
                 jz      fakememsize_parse
+                cmp     al, "S"             ; set display start flag
+                jz      sds_parse
 @gottaloop:     jcxz    no_params
                 loop    @parse_loop         ; else gotta loop
 no_params:
@@ -418,31 +425,38 @@ fakememsize_parse:
                 dec     cx
                 jcxz    no_params
                 
-                push    bx
-                ; get BCD number - new memory size
-                xor     ah, ah
-                xor     dx, dx
-                mov     bx, 10              ; multiplier          
-@fakememsize_loop:
-                imul    dx, bx              ; dx *= 10    
-                lodsb
-                cmp     al, 0x3A            ; blabla :)
-                ja      @fakememsize_gottaloop
-                cmp     al, 0x30            ; end or invalid param
-                jb      @fakememsize_end          
-                ; else we have char in '0' - '9' range
-                sub     al, 0x30
-                add     dx, ax
-@fakememsize_gottaloop:
-                loop    @fakememsize_loop
+                call    bcdhex
                 
-@fakememsize_end:
-                pop     bx
                 ;we got a number, store it :)
-                mov     [memsize_temp], dx
-                inc     [cs:reset_flag]
+                mov     [memsize_temp], ax
+                or      [reset_flag], 1
                 jmp     @gottaloop
-
+                
+                ; parse set display start flag
+sds_parse:
+                dec     cx
+                jcxz    no_params
+                
+                call    bcdhex
+                
+                ; check param
+                dec     ax                ; /S1 - force wait for retrace
+                jnz     @sds_p2
+                mov     dx, 0xFF80        ; dh - AND mask, dl - OR mask
+                jmp     sds_end
+@sds_p2:
+                dec     ax                ; /S2 - force no wait for retrace
+                jnz     @sds_other
+                mov     dx, 0x7F00
+                jmp     sds_end
+@sds_other:
+                mov     dx, 0xFF00        ; any other param - by application
+                
+sds_end:
+                mov     [sds_mask], dx
+                or      [reset_flag], 2
+                jmp     @gottaloop
+                
 build:
                 ; build it! :)
                 mov     ah, 9
@@ -459,7 +473,7 @@ build:
                 jmp     install_done
                 
 installed:
-                cmp     [cs:reset_flag], 0
+                cmp     [reset_flag], 0
                 jz      already               ; already installed
                 call    reset_vars
                 mov     ah, 9
@@ -478,6 +492,41 @@ install_done:   mov     dx, si
                 
                 
 ; SUBPROGRAMS
+
+; bcd to hex parser
+; input:  ds:si - string, cx - number of avail chars in string
+; output: ax - number
+bcdhex:
+                xor     ax, ax
+                push    bx
+                push    dx
+                
+                ; get BCD number
+                xor     dx, dx
+                mov     bx, 10              ; multiplier          
+@bcdhex_loop:
+                lodsb
+                cmp     al, 0xA             ; CR
+                jz      @bcdhex_end
+                cmp     al, 0xD             ; LF
+                jz      @bcdhex_end
+                cmp     al, 0x3A            ; blabla :)
+                ja      @bcdhex_gottaloop
+                cmp     al, 0x30            ; end or invalid param
+                jb      @bcdhex_end          
+                ; else we have char in '0' - '9' range
+                sub     al, 0x30
+                imul    dx, bx              ; dx *= 10    
+                add     dx, ax
+@bcdhex_gottaloop:
+                loop    @bcdhex_loop
+                
+@bcdhex_end:
+                mov     ax, dx              ; save given number in ax
+                pop     dx
+                pop     bx
+                ret
+
 ; release resident from memory
 ; input: es - resident segment
 ; output: nope, immediate exit from application
@@ -552,10 +601,22 @@ install:
 ;----
 ; ставим те переменные которые меняются
 reset_vars:
+                mov     di, [reset_flag]
+                test    di, 1
+                jz      @reset_skip1
                 ; set memory size
-                mov     ax, [cs:memsize_temp]
-                mov     [es:fakememsize], ax
+                mov     ax, [memsize_temp]
+                mov     [es:fakememsize], ax                
+
+@reset_skip1:
+                test    di, 2
+                jz      @reset_skip2
+                ; set display start flags
+                mov     ax, [sds_mask]
+                mov     [es:sds_or],  al
+                mov     [es:sds_and], ah
                 
+@reset_skip2:
                 ret
 
 ; set mode number patching and mode number table
@@ -639,13 +700,15 @@ dash_str        db      " - $"
 reset_str       db      "reset$"
 released_str    db      "released$"
 relfail_str     db      "unable to release$"
-help_str        db      "help",10,13
-                db      "/M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)",10,13
+help_str        db      "help",13,10
+                db      "/M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)",13,10
+                db      "/S[x]   - 'set display start' mode",13,10
+                db      "          (/S0 - normal, /S1 - force wait for retrace, /S2 - force no wait)",13,10
                 db      "/R, /U  - release from memory$"
-reset_flag      db      0
-memsize_temp    dw      0
+reset_flag      dw      0
 
 ; some place for mode info block (will be used for initialization)
 vbeinfo_transient:
-
 ; некоторые временные переменные - будут переписаны vesa инфой
+memsize_temp    dw      ?
+sds_mask        dw      ?
