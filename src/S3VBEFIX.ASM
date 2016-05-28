@@ -127,12 +127,27 @@ newint10:
             mov     [patchedmode], bx
             mov     cx, bx
             pop     bx
+            
 @@f2:
             cmp     al, 0x2     ; Function 02h  - Set VBE Mode
             jnz     @@f7
             ; replace mode number
             call    patch_mode
             mov     [patchedmode], bx
+            ; if lfb+clear requested - set banked+clear then lfb+noclear
+            ; (because booster can crash the system otherwise)
+            test    bh, 0x40
+            jz      @invoke     ; banked
+            ; do it!
+            push    ax
+            push    bx
+            and     bh, 0xBF
+            pushf                   ; в принципе можно и int 0x10, защита от
+            call    dword [int10ofs]; повторного вхождения есть
+            pop     bx
+            pop     ax
+            or      bh, 0x80
+            
 @@f7:
             cmp     al, 0x7     ; Function 07h - Set/Get Display Start
             jnz     @invoke
@@ -217,6 +232,19 @@ lock_extensions:
             out     dx, ax
             ret
             
+; read-modify-write proc
+; input:  dx - index port; al - index; bh - AND mask; bl - OR mask
+; output: al - resulting value
+rmw:
+            out     dx, al
+            inc     dx
+            in      al, dx
+            and     al, bh
+            or      al, bl
+            out     dx, al
+            dec     dx
+            ret
+            
             ; vga function 0x0 - fix primary stream fifo fetch bug
 fix_fetch:
             mov     dx, 0x3D4
@@ -224,12 +252,8 @@ fix_fetch:
             call    unlock_extensions
             
             mov     al, 0x90
-            out     dx, al
-            inc     dx
-            in      al, dx
-            and     al, 0x7F
-            out     dx, al   ; disable fetch
-            dec     dx
+            mov     bx, 0x7F00 ; disable fetch
+            call    rmw
             
             call    lock_extensions
             
@@ -316,37 +340,86 @@ patch_modeset:
             
             ; check for modenum is patched
             cmp     bx, dx
-            jz      done_iret
+            jz      modeset_booster
             
             mov     dx, 0x3D4
             
-            ; set scanline height = 1
-            mov     al, 0x9
-            out     dx, al
-            inc     dl
-            in      al, dx
-            and     al, 0x60
-            out     dx, al
+            ; set scanline height = 1       
+            mov      al, 0x9
+            mov      bx, 0x6000
+            call     rmw
             
+modeset_booster:
+            ; BOOSTAH! :)
+            mov     dx, 0x3D4
+            call    unlock_extensions
+            test    bx, 0x4000
+            jnz     booster_lfb
+            
+            ; boost banked modes
+            ; bank switching is enabled already, we need to just enable
+            ; linear addressing via 64k window and set new linear window address
+            ; сперто из SVGATRIX.TXT и перепилено чуток
+            
+            ; set 64k window size and disable linear addressing
+            mov     al, 0x58
+            mov     bx, 0xEC00
+            call    rmw
+            
+            ; set 0xA0000 as linear window address
+            xor     ax, ax
+            mov     al, 0x59
+            out     dx, ax
+            inc     ax
+            mov     ah, 0x0A
+            out     dx, ax
+            
+            ; enable linear addressing (костылек :)
+            mov     al, 0x58
+            mov     bx, 0xFF10
+            call    rmw
+            
+            jmp     booster_done
+booster_lfb:
+            ; restore linear window address and size
+            ; TODO: починить LFB ибо все поломалось
+            mov     al, 0x58
+            mov     bx, 0xEC00
+            call    rmw
+            
+            mov     bx, [lfb_addr]
+            mov     al, 0x59
+            mov     ah, bh
+            out     dx, ax
+            inc     ax
+            mov     ah, bl
+            out     dx, ax
+            
+            mov     ah, [lfb_size]
+            mov     al, 0x58
+            or      ah, 0x10
+            out     dx, ax
+            
+booster_done:
+            call    lock_extensions
             jmp     done_iret
-            
 
 ; replace current VESA mode number with other (used for mode info block patching)
 ; input:  BX - VESA mode number; DS:SI - address of replacement table
 ; output: BX - patched mode number; SI destroyed          
 patch_mode:
             push    ax
-@loop:
+@patch_loop:
             lodsb
             cmp     al, 0xFF    ; check for 0xFF terminator
-            jz      @done
+            jz      @patch_done
             cmp     bl, al
-            jz      @yep
+            jz      @patch_yep
             inc     si          ; else adjust table
-            jmp     @loop
-@yep:       lodsb
+            jmp     @patch_loop
+@patch_yep: lodsb
             mov     bl, al
-@done:      pop     ax
+@patch_done:pop     ax
             ret                  
             
 
@@ -359,7 +432,8 @@ mode_xlat   db      (10*2 + 1) dup 0xFF  ; for security reasons
 
 ; additional vars
 fakememsize dw      0 ; fake memory size (set via /Mx, 0 - BIOS default)
-
+lfb_size    db      0 ; LFB size (0x3d4 index 0x58)
+lfb_addr    dw      0 ; LFB address bits 16-31 (saved for booster)
 ; VESA mode table starts here (with dynamic size)
 mode_table:
 newint10end:
@@ -375,8 +449,6 @@ init:
                 mov     ah, 9
                 mov     dx, info_str
                 int     21h
-                mov     dx, dash_str
-                int     21h                 ; display our message
                 
                 mov     ax, 3510h
                 int     21h                 ; get int10h vector
@@ -543,6 +615,24 @@ release:        mov     ah, 9                   ; remove us
                 mov     ax, 2510h
                 int     21h                    ; set old int10h
                 
+                ; restore LFB address and size
+                mov     dx, 0x3d4
+                call    (unlock_extensions + (realint10 - resident_start))
+                
+                mov     bx, [es:lfb_addr]
+                mov     al, 0x59
+                mov     ah, bh
+                out     dx, ax
+                inc     ax
+                mov     ah, bl
+                out     dx, ax
+                
+                mov     ah, [es:lfb_size]
+                mov     al, 0x58
+                out     dx, ax
+                
+                call    (lock_extensions + (realint10 - resident_start))
+                
                 ; now we should release memory, okay? :)
                 
                 mov     ah, 49h
@@ -621,6 +711,32 @@ reset_vars:
 
 ; set mode number patching and mode number table
 hujak_info:
+                ; get LFB address
+                mov     dx, 0x3D4
+                call    unlock_extensions
+                
+                mov     al, 0x58
+                out     dx, al
+                inc     dx
+                in      al, dx
+                mov     [lfb_size], al
+                dec     dx
+                
+                mov     al, 0x59
+                out     dx, al
+                inc     dx
+                in      al, dx
+                mov     bh, al
+                dec     dx
+                
+                mov     al, 0x5A
+                out     dx, al
+                inc     dx
+                in      al, dx
+                mov     bl, al
+                dec     dx
+                mov     [lfb_addr], bx
+                call    lock_extensions
 
                 ; get vbe info block
                 mov     di, vbeinfo_transient
@@ -628,7 +744,7 @@ hujak_info:
                 ; осторожно, возможна "проблема курицы и яйца", так что
                 ; вместо int 10h здесь будет прямой вызов старого обработчика
                 pushf
-                call    dword [cs:int10ofs]
+                call    dword [int10ofs]
                 
                 ; copy mode table
                 mov     ax, word [cs:vbeinfo_transient + VbeInfoBlock.VideoModePtr + 2]
@@ -667,7 +783,7 @@ hujak_info:
                 ; get mode info
                 mov     ax, 0x4F01
                 pushf
-                call    dword [cs:int10ofs]
+                call    dword [int10ofs]
                 
                 mov     ax, [es:di + ModeInfoBlock.XResolution]
                 cmp     ax, 320
@@ -693,10 +809,10 @@ hujak_info:
                 add     si, 2
                 ret
 
-info_str        db      "S3 VBE fix TSR - by wbc\\bz7 2o.o5.2o16$"
+info_str        db      "S3 VBE fix TSR - by wbc\\bz7 2o.o5.2o16"
+dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
 installed_str   db      "installed$"
-dash_str        db      " - $"
 reset_str       db      "reset$"
 released_str    db      "released$"
 relfail_str     db      "unable to release$"
