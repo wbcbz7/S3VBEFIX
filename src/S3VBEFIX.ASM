@@ -130,7 +130,7 @@ newint10:
             
 @@f2:
             cmp     al, 0x2     ; Function 02h  - Set VBE Mode
-            jnz     @@f7
+            jnz     @@f5
             ; replace mode number
             call    patch_mode
             mov     [patchedmode], bx
@@ -147,6 +147,13 @@ newint10:
             pop     bx
             pop     ax
             or      bh, 0x80
+            
+@@f5:
+            cmp     al, 0x5     ; Function 05h - Display Window Control
+            jnz     @@f7
+            push    cs
+            call    bankproc    ; perform far call
+            jmp     done_2
             
 @@f7:
             cmp     al, 0x7     ; Function 07h - Set/Get Display Start
@@ -277,6 +284,11 @@ patch_vbeinfo:
             
             ; VESA function 0x1 patch
 patch_modeinfo:
+            mov     ax, cs
+            mov     word [es:di + ModeInfoBlock.WinFuncPtr + 2], ax
+            mov     ax, bankproc
+            mov     word [es:di + ModeInfoBlock.WinFuncPtr    ], ax
+
             ; check for overriden memsize
             mov     ax, [fakememsize] 
             test    ax, ax
@@ -404,6 +416,58 @@ booster_done:
             call    lock_extensions
             jmp     done_iret
 
+            ; VESA function 0x5 new routine
+bankproc:
+            push    cx
+            
+            test    bl, bl              ; check for selected window
+            jnz     @bankproc_fail      ; window B is not supported
+
+            mov     cx, dx
+            mov     dx, 0x3D4
+            call    unlock_extensions
+            
+            ; check for banking enabled
+            mov     al, 0x31
+            out     dx, al
+            inc     dx
+            in      al, dx
+            dec     dx
+            test    al, 1
+            jz      @bankproc_lfb       ; not supported in VGA or LFB modes
+            
+            mov     al, 0x6A
+            ; check for get/set bank
+            test    bh, bh
+            jnz     @bankproc_get
+            
+            ; set new window pos
+            mov     ah, cl
+            out     dx, ax
+            call    lock_extensions
+            jmp     @bankproc_ok
+            
+@bankproc_get:
+            out     dx, al
+            inc     dx
+            in      al, dx
+            dec     dx
+            call    lock_extensions
+            xor     dx, dx
+            mov     dl, al
+            
+@bankproc_ok:
+            mov     ax, 0x004F
+            jmp     @bankproc_done
+@bankproc_fail:
+            mov     ax, 0x014F
+            jmp     @bankproc_done
+@bankproc_lfb:
+            mov     ax, 0x034F
+@bankproc_done:
+            pop     cx
+            retf
+            
 ; replace current VESA mode number with other (used for mode info block patching)
 ; input:  BX - VESA mode number; DS:SI - address of replacement table
 ; output: BX - patched mode number; SI destroyed          
