@@ -357,11 +357,15 @@ patch_modeset:
             mov     dx, 0x3D4
             
             ; set scanline height = 1       
-            mov      al, 0x9
-            mov      bx, 0x6000
-            call     rmw
+            mov     al, 0x9
+            mov     bx, 0x6000
+            call    rmw
             
 modeset_booster:
+            db      0xB8                ; mov ax, ?
+booster_en  dw      0                   ; booster flag (nonzero - enabled)
+            test    ax, ax
+            jz      done_iret           ; booster not enabled
             ; BOOSTAH! :)
             mov     dx, 0x3D4
             call    unlock_extensions
@@ -394,7 +398,6 @@ modeset_booster:
             jmp     booster_done
 booster_lfb:
             ; restore linear window address and size
-            ; TODO: починить LFB ибо все поломалось
             mov     al, 0x58
             mov     bx, 0xEC00
             call    rmw
@@ -524,6 +527,7 @@ parse:
                 ; зануляем часть переменных
                 xor     ax, ax
                 mov     [memsize_temp], ax
+                mov     [booster_temp], ax
                 mov     ax, 0xFF00
                 mov     [sds_mask], ax
                 
@@ -548,6 +552,8 @@ parse:
                 jz      release
                 cmp     al, "R"             ; release
                 jz      release
+                cmp     al, "B"             ; booster enable\disable
+                jz      booster_parse
                 cmp     al, "M"             ; override memory size
                 jz      fakememsize_parse
                 cmp     al, "S"             ; set display start flag
@@ -592,6 +598,37 @@ sds_end:
                 mov     [sds_mask], dx
                 or      [reset_flag], 2
                 jmp     @gottaloop
+                
+                ; parse booster enable\disable
+                ; какой-то пиздец здесь :D
+booster_parse:
+                push    dx
+                mov     dx, 1               ; if /B param present - assume that booster is enabled
+                dec     cx
+                jcxz    @bparse_end         ; last param - assume that enabled
+@bparse_loop:
+                lodsb
+                cmp     al, 0xA             ; CR
+                jz      @bparse_end
+                cmp     al, 0xD             ; LF
+                jz      @bparse_end
+                cmp     al, 0x2D            ; "-" - disable
+                jz      @bparse_dec
+                cmp     al, 0x2B            ; "+" - enable
+                jz      @bparse_end
+                cmp     al, 0x2E            ; blabla :)
+                ja      @bparse_gottaloop
+                jmp     @bparse_end         ; else - invalid param or end        
+@bparse_gottaloop:
+                loop    @bparse_loop
+@bparse_end:
+                mov     [booster_temp], dx
+                or      [reset_flag], 4
+                pop     dx
+                jmp     @gottaloop
+@bparse_dec:
+                dec     dx                  ; dx = 0
+                jmp     @bparse_end
                 
 build:
                 ; build it! :)
@@ -756,6 +793,7 @@ install:
 ; ставим те переменные которые меняются
 reset_vars:
                 mov     di, [reset_flag]
+                
                 test    di, 1
                 jz      @reset_skip1
                 ; set memory size
@@ -771,6 +809,13 @@ reset_vars:
                 mov     [es:sds_and], ah
                 
 @reset_skip2:
+                test    di, 4
+                jz      @reset_skip4
+                ; set booster flag
+                mov     ax, [booster_temp]
+                mov     [es:booster_en], ax
+                
+@reset_skip4:
                 ret
 
 ; set mode number patching and mode number table
@@ -881,6 +926,7 @@ reset_str       db      "reset$"
 released_str    db      "released$"
 relfail_str     db      "unable to release$"
 help_str        db      "help",13,10
+                db      "/B[+/-] - enable\disable banked VESA modes booster",13,10
                 db      "/M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)",13,10
                 db      "/S[x]   - 'set display start' mode",13,10
                 db      "          (/S0 - normal, /S1 - force wait for retrace, /S2 - force no wait)",13,10
@@ -892,3 +938,4 @@ vbeinfo_transient:
 ; некоторые временные переменные - будут переписаны vesa инфой
 memsize_temp    dw      ?
 sds_mask        dw      ?
+booster_temp    dw      ?
