@@ -649,6 +649,7 @@ installed:
                 cmp     [reset_flag], 0
                 jz      already               ; already installed
                 call    reset_vars
+                call    restore_lfb
                 mov     ah, 9
                 mov     dx, reset_str
                 int     21h
@@ -699,7 +700,27 @@ bcdhex:
                 pop     dx
                 pop     bx
                 ret
-
+                
+; restore LFB address
+; input: es - resident segment
+; output: none
+restore_lfb:
+                mov     dx, 0x3D4
+                call    (unlock_extensions + (realint10 - resident_start))
+                mov     bx, [es:lfb_addr]
+                mov     al, 0x59
+                mov     ah, bh
+                out     dx, ax
+                inc     ax
+                mov     ah, bl
+                out     dx, ax
+                
+                mov     ah, [es:lfb_size]
+                mov     al, 0x58
+                out     dx, ax
+                call    (lock_extensions + (realint10 - resident_start))
+                ret
+                
 ; release resident from memory
 ; input: es - resident segment
 ; output: nope, immediate exit from application
@@ -717,22 +738,7 @@ release:        mov     ah, 9                   ; remove us
                 int     21h                    ; set old int10h
                 
                 ; restore LFB address and size
-                mov     dx, 0x3d4
-                call    (unlock_extensions + (realint10 - resident_start))
-                
-                mov     bx, [es:lfb_addr]
-                mov     al, 0x59
-                mov     ah, bh
-                out     dx, ax
-                inc     ax
-                mov     ah, bl
-                out     dx, ax
-                
-                mov     ah, [es:lfb_size]
-                mov     al, 0x58
-                out     dx, ax
-                
-                call    (lock_extensions + (realint10 - resident_start))
+                call    restore_lfb
                 
                 ; now we should release memory, okay? :)
                 
@@ -918,7 +924,7 @@ hujak_info:
                 add     si, 2
                 ret
 
-info_str        db      "S3 VBE fix TSR - by wbc\\bz7 2o.o5.2o16"
+info_str        db      "S3 VBE fix TSR v.0.4.0 - by wbc\\bz7 o8.o6.2o16"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
 installed_str   db      "installed$"

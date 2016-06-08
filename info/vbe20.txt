@@ -87,7 +87,8 @@
      The standard VBE functions may be supplemented by OEM's as necessary
      to support custom or proprietary functions unique to the manufacturer.
      This mechanism enables the OEM to establish functions that may be
-     standard to the product line, or provide access to special hardware
+     standard to the product line, or provide access to special hardware
+
      enhancements.
 
      Although previous VBE standards assumed that the underlying graphics
@@ -675,7 +676,8 @@
      data structure.  This information became mandatory with VBE version
      1.2 and above, so D1 is no longer used and should be set to 1.  The
      Direct Color fields are valid only if the MemoryModel field is set to
-     a 6 (Direct Color) or 7 (YUV).
+     a 6 (Direct Color) or 7 (YUV).
+
      Bit D2 indicates whether the video BIOS has support for output
      functions like TTY output, scroll, etc. in this mode.  TTY support is
      recommended but not required for all extended text and graphic modes.
@@ -850,7 +852,8 @@
 
      VBE Version 1.1 and earlier defined Direct Color graphics modes with
      pixel formats 1:5:5:5, 8:8:8, and 8:8:8:8  as a Packed Pixel model
-     with 16, 24, and 32 bits per pixel, respectively. In VBE Version 1.2
+     with 16, 24, and 32 bits per pixel, respectively. In VBE Version 1.2
+
      and later, the Direct Color modes use the Direct Color memory model
      and use the MaskSize and FieldPosition fields of the ModeInfoBlock to
      describe the pixel format. BitsPerPixel is always defined to be the
@@ -911,7 +914,8 @@
      U. The FieldPosition fields should be set to 0 in modes using a memory
      model that does not have pixels with component fields.
 
-     The DirectColorModeInfo field describes important characteristics of
+     The DirectColorModeInfo field describes important characteristics of
+
      direct color modes.  Bit D0 specifies whether the color ramp of the
      DAC is fixed or programmable. If the color ramp is fixed, then it can
      not be changed. If the color ramp is programmable, it is assumed that

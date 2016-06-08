@@ -1,0 +1,1 @@
+This software is distributed under WTFPL license: http://www.wtfpl.net/txt/copying/
