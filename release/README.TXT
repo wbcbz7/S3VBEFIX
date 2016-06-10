@@ -1,14 +1,14 @@
 
  < logo placeholder >
 
-            S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.4.0
+            S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.4.1
        blah-blah copyleft (cl) 2o16 by Artem Vasilev - wbc \\ b-state
  . _ _____________________________________________________________________ _ .
 
  0x0. disclaimer
 
-    this product is distributed "as is", so if ypu computer was freaked up or
- you have lost all your data I will NOT respond blah-blah, you know :)
+    this product is distributed "as is", so if your computer was freaked up or
+ you have lost all your data I will NOT respond for blah-blah, you know :)
 
  0x1. what the &^*% it is?
 
@@ -16,7 +16,7 @@
  2.0 (starting with S3 Trio64V2/ViRGE-DX and later). It fully supports VESA
  BIOS Extensions 2.0 with LOTS of videomodes (from 320x200 to 1600x1200!),
  linear framebuffer support and mostly bug-free interface (as I know about 90%
- of apps\games\demos\intros work without issues), althought...
+ of apps\games\demos\intros work without issues), although...
     ...yep, some bugs are found and I had written this small TSR :) 
 
  0x2. system requirements
@@ -35,8 +35,8 @@
 
  what S3VBEFIX can do with your card?
   - primary stream fifo fetch fix
-    Normally FIFO fetch is used in VESA modes for perfomance optimising, but
-    video BIOS does not disables it when swithcing back to VGA modes, resulting
+    Normally FIFO fetch is used in VESA modes for performance optimizing, but
+    video BIOS does not disables it when switching back to VGA modes, resulting
     in various visual glitches
     still can't imagine it? :)
     - run Quake, DO NOT use -stdvid switch, the open console window
@@ -63,6 +63,17 @@
     (BL=0x80) before calling set display start (AX=0x4F07) function, but some
     apps don't uses it properly. in this case you can use /S[x] key for forcing
     flag status.
+  - force RAMDAC CLUT width to 6 bit per channel (Trio3D and later)
+    (NB: CLUT means palette RAM in RAMDAC, or well known ports 0x3C6-0x3C9 :)
+    Older cards (like ViRGE/DX) are able to use only 6 bits per channel (18 bit
+    overall) in RAMDAC CLUT in 8bpp mode, while newer (Trio3D and later) are
+    switchable to 8 bit per channel (24 bit total) palette mode, thus giving
+    more color shades (256 vs 64) and total colors in palette (16.7m vs 256k).
+    Some games (like Terra Nova) do have support for wide (8 bit per channel)
+    RAMDAC' CLUT in 8bpp modes but do not work in this mode properly (too dark
+    or corrupted colors). In this case use /D6 key to force 18 bit CLUT mode.
+    Set /D0 or /D8 to normal operation. Note that /D8 will NOT enable 24 bit
+    CLUT mode on ViRGE/DX and older cards since it's not supported by hardware!
   - VESA banked modes booster!
     YEAH, it works like S3SPDUP but doesn't require S3VBE20 for proper work!
     It just enables linear addressing for 0xA0000 window while bank switching
@@ -79,6 +90,7 @@
    usage - [LH] S3VBEFIX.COM <key> <key>...
  keys are:
    - /B[+/-] - enable\disable banked VESA modes booster (disabled by default)
+   - /D[x]   - force RAMDAC CLUT width (/D8 - normal, /D6 - force 6 bit)
    - /M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)
    - /S[x]   - 'set display start' mode
                (x = 0 - normal, 1 - force wait for retrace, 2 - force no wait)
@@ -96,7 +108,7 @@
 
    Once you have installed TSR you can change current settings on the fly by
  running it again with new parameters in command line.
-   You can replase slash with dash "-", also keys are case-insensitive and can
+   You can replace slash with dash "-", also keys are case-insensitive and can
  be expanded, for example:
   "S3VBEFIX.COM /BOOSTER=+ /MEMORY=8" and "S3VBEFIX.COM -b+ -m8" are same.
 
@@ -112,6 +124,17 @@
  0x8. how to contact me?
    mailto:wbc.bz7(at)gmail.com or telegram (at)wbcbz7 or irc.forestnet.org/#z80
    vogons.org - wbc, phantom.sannata.ru and other sites - wbcbz7
+
+ 0x9. greetings
+   - #z80 irc channnel users
+   - demoscene pals - well, pretty big list here :)
+     diver4d, prof4d, nyuk, kowalski, introspec, n1k-o, nodeus, mmcm, scl^mc,
+     mmcm, psndcj, wbr, blackcat\eracg, xlat, buddy, quiet, grachev, vbi, tsl,
+     g0blinish, denpopov, dman_pcb, bitl, f0x, manwe and da russian scene!
+     sensensthal, hellmood, optimus, orby, branch, mikron, demosplash staff,
+     fsqrt, factor6, yerzmyey and ofcoz others because we rulez!
+   - vogoners - keropi, phil, leileilol, gerwin, vetz and all coders.
+   - hello world! :)
 
  that's all! :)
 

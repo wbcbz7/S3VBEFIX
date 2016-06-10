@@ -273,6 +273,11 @@ patch_vbeinfo:
             mov     ax, mode_table
             mov     word [es:di + VbeInfoBlock.VideoModePtr    ], ax
             
+            mov     al, byte [es:di + VbeInfoBlock.Capabilities]
+            db      0x24  ; and al, ?
+cap_and     db      0xFF
+            mov     byte [es:di + VbeInfoBlock.Capabilities], al
+            
             mov     ax, [fakememsize] 
             test    ax, ax
             jz      done_iret
@@ -530,6 +535,7 @@ parse:
                 mov     [booster_temp], ax
                 mov     ax, 0xFF00
                 mov     [sds_mask], ax
+                mov     [cap_temp], ah
                 
                 ; parse command line
                 mov     si, 80h
@@ -554,6 +560,8 @@ parse:
                 jz      release
                 cmp     al, "B"             ; booster enable\disable
                 jz      booster_parse
+                cmp     al, "D"             ; force RAMDAC width
+                jz      dacwidth_parse
                 cmp     al, "M"             ; override memory size
                 jz      fakememsize_parse
                 cmp     al, "S"             ; set display start flag
@@ -563,6 +571,7 @@ parse:
 no_params:
                 jmp     build               ; empty or invalid commandline
                 
+                ; parse override memory size
 fakememsize_parse:
                 dec     cx
                 jcxz    no_params
@@ -572,6 +581,21 @@ fakememsize_parse:
                 ;we got a number, store it :)
                 mov     [memsize_temp], ax
                 or      [reset_flag], 1
+                jmp     @gottaloop
+                
+                ; parse force RAMDAC width
+dacwidth_parse:
+                dec     cx
+                jcxz    no_params
+                
+                call    bcdhex
+                
+                ;we got a number, store it :)
+                or      [reset_flag], 8
+                cmp     ax, 6
+                jnz     @gottaloop
+                mov     al, 0xFE
+                mov     [cap_temp], al
                 jmp     @gottaloop
                 
                 ; parse set display start flag
@@ -822,6 +846,13 @@ reset_vars:
                 mov     [es:booster_en], ax
                 
 @reset_skip4:
+                test    di, 8
+                jz      @reset_skip8
+                ; set booster flag
+                mov     al, [cap_temp]
+                mov     [es:cap_and], al
+                
+@reset_skip8:
                 ret
 
 ; set mode number patching and mode number table
@@ -924,7 +955,7 @@ hujak_info:
                 add     si, 2
                 ret
 
-info_str        db      "S3 VBE fix TSR v.0.4.0 - by wbc\\bz7 o8.o6.2o16"
+info_str        db      "S3 VBE fix TSR v.0.4.1 - by wbc\\bz7 1o.o6.2o16"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
 installed_str   db      "installed$"
@@ -933,6 +964,7 @@ released_str    db      "released$"
 relfail_str     db      "unable to release$"
 help_str        db      "help",13,10
                 db      "/B[+/-] - enable\disable banked VESA modes booster",13,10
+                db      "/D[x]   - force RAMDAC CLUT width (/D8 - normal, /D6 - force 6 bit)",13,10
                 db      "/M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)",13,10
                 db      "/S[x]   - 'set display start' mode",13,10
                 db      "          (/S0 - normal, /S1 - force wait for retrace, /S2 - force no wait)",13,10
@@ -945,3 +977,4 @@ vbeinfo_transient:
 memsize_temp    dw      ?
 sds_mask        dw      ?
 booster_temp    dw      ?
+cap_temp        db      ?
