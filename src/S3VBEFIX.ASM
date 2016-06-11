@@ -494,7 +494,11 @@ patch_mode:
 @patch_done:pop     ax
             ret                  
             
-
+; additional vars
+fakememsize dw      0 ; fake memory size (set via /Mx, 0 - BIOS default)
+lfb_size    db      0 ; LFB size (0x3d4 index 0x58)
+lfb_addr    dw      0 ; LFB address bits 16-31 (saved for booster)
+            
 ; mode number patch table (filled by transient path)
 ; format - [src_modenum], [dst_modenum], ... , 0xFF
 ; only low bytes are stored
@@ -502,10 +506,6 @@ mode_xlat   db      (10*2 + 1) dup 0xFF  ; for security reasons
 ; so why (10*2) + 1? :) well because we can have 320x(200\240) 8\15\16\24\32bpp
 ; and we need to expand 'em all (+ termination byte ofcourse)
 
-; additional vars
-fakememsize dw      0 ; fake memory size (set via /Mx, 0 - BIOS default)
-lfb_size    db      0 ; LFB size (0x3d4 index 0x58)
-lfb_addr    dw      0 ; LFB address bits 16-31 (saved for booster)
 ; VESA mode table starts here (with dynamic size)
 mode_table:
 newint10end:
@@ -667,6 +667,7 @@ build:
                 call    install
                 call    reset_vars
                 call    hujak_info
+                call    display_status
                 jmp     install_done
                 
 installed:
@@ -677,12 +678,14 @@ installed:
                 mov     ah, 9
                 mov     dx, reset_str
                 int     21h
+                call    display_status
                 jmp     done
                 
 already:        mov     dx, already_str
                 int     21h
                 mov     dx, installed_str
                 int     21h
+                call    display_status
                 jmp     done
                 
 install_done:   mov     dx, si
@@ -722,6 +725,37 @@ bcdhex:
 @bcdhex_end:
                 mov     ax, dx              ; save given number in ax
                 pop     dx
+                pop     bx
+                ret
+                
+; hex to bcd -> stdout converter 
+; input:  ax - number
+; output: bcd number in stdout
+; uses up to 10 bytes in stack
+hexbcd:
+                push    bx
+                push    cx
+                push    dx
+                mov     bx, 10
+                xor     cx, cx
+@hexbcd_loop:
+                xor     dx, dx
+                div     bx      ; remainder in dl
+                add     dl, 0x30
+                push    dx
+                inc     cx
+                test    ax, ax
+                jnz     @hexbcd_loop
+                
+                mov     ah, 0x2
+                ; закончили конвертировать
+@hexbcd_print:
+                pop     dx
+                int     0x21
+                loop    @hexbcd_print
+                
+                pop     dx
+                pop     cx
                 pop     bx
                 ret
                 
@@ -855,6 +889,147 @@ reset_vars:
 @reset_skip8:
                 ret
 
+; display curent TSR status
+; input:  es - resident segment
+; output: none
+; походу эта епаная бодяга действует - я начал давать меткам короткие имена xD
+display_status:
+                push    ax
+                push    bx
+                push    cx
+                push    dx
+                mov     ah, 0x9
+                ; display booster status
+                mov     dx, db_1
+                int     0x21
+                
+                mov     bx, [es:booster_en]
+                test    bx, bx
+                jz      @db_dis
+                mov     dx, db_en
+                int     0x21
+                jmp     @db_done
+@db_dis:
+                mov     dx, db_dis
+                int     0x21
+@db_done:
+                mov     dx, crlf
+                int     0x21
+                
+                ; display ramdac width status
+                mov     dx, dd_1
+                int     0x21
+                
+                mov     bl, [es:cap_and]
+                inc     bl
+                jz      @dd_dis
+                mov     dx, dd_en
+                int     0x21
+                jmp     @dd_done
+@dd_dis:
+                mov     dx, dd_dis
+                int     0x21
+@dd_done:
+                mov     dx, crlf
+                int     0x21
+                
+                ; display override memory status
+                mov     dx, dm_1
+                int     0x21
+                
+                mov     bx, [es:fakememsize]
+                test    bx, bx
+                jz      @dm_bios
+                
+                mov     ax, bx
+                shl     ax, 6
+                call    hexbcd
+                
+                mov     ah, 0x9
+                mov     dx, dm_kb
+                int     0x21
+                mov     dx, dm_forced
+                int     0x21
+                jmp     @dm_done
+@dm_bios:
+                ; query VESA BIOS
+                push    es
+                push    di
+                push    cs
+                pop     es
+                
+                mov     ax, 0x4F00
+                mov     di, vbeinfo_transient
+                int     0x10
+                mov     ax, [es:di + VbeInfoBlock.TotalMemory]
+                shl     ax, 6
+                call    hexbcd
+                
+                pop     di
+                pop     es
+                mov     ah, 0x9
+                mov     dx, dm_kb
+                int     0x21
+@dm_done:
+                mov     dx, crlf
+                int     0x21
+                
+                ; display "set display start" status
+
+                mov     dx, ds_1
+                int     0x21
+                
+                mov     bl, [es:sds_or]
+                mov     bh, [es:sds_and]
+                cmp     bx, 0xFF00
+                jnz     @ds_force
+                mov     dx, dd_dis ; RE-RE-RE-RECYCLING!!1!!
+                int     0x21
+                jmp     @ds_done
+@ds_force:
+                cmp     bx, 0x7F00
+                jnz     @ds_wait
+                
+                mov     dx, ds_forced
+                int     0x21
+                mov     dx, ds_no
+                int     0x21
+                mov     dx, ds_retr
+                int     0x21
+                jmp     @ds_done
+@ds_wait:
+                mov     dx, ds_forced
+                int     0x21
+                mov     dx, ds_retr
+                int     0x21
+@ds_done:
+                mov     dx, crlf
+                int     0x21
+                
+                pop     dx
+                pop     cx
+                pop     bx
+                pop     ax
+                ret
+                
+crlf            db      10,13,"$" 
+db_1            db      "VESA banked modes booster status: $"
+db_en           db      "enabled$"
+db_dis          db      "disabled$"
+
+dd_1            db      "RAMDAC CLUT width setting:        $"
+dd_en           db      "force 6 bit per channel$"
+dd_dis          db      "normal$"
+
+dm_1            db      "VESA available memory size:       $"
+dm_forced       db      " (forced)$"
+dm_kb           db      " KB$"
+
+ds_1            db      "'set display start' flag status:  $"
+ds_forced       db      "force $"
+ds_no           db      "no $"
+ds_retr         db      "wait for retrace$"
+
 ; set mode number patching and mode number table
 hujak_info:
                 ; get LFB address
@@ -934,6 +1109,9 @@ hujak_info:
                 mov     ax, [es:di + ModeInfoBlock.XResolution]
                 cmp     ax, 320
                 jnz     @scan_not_target    ; не наш клиент :)
+                mov     ax, [es:di + ModeInfoBlock.YResolution]
+                cmp     ax, 350
+                jae     @scan_not_target    ; не наш клиент :)
                 
                 ; add new mode to mode table and patch table
                 mov     word [ds:si    ], dx
@@ -958,9 +1136,9 @@ hujak_info:
 info_str        db      "S3 VBE fix TSR v.0.4.1 - by wbc\\bz7 1o.o6.2o16"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
-installed_str   db      "installed$"
-reset_str       db      "reset$"
-released_str    db      "released$"
+installed_str   db      "installed",10,13,"$"
+reset_str       db      "reset",10,13,"$"
+released_str    db      "released",10,13,"$"
 relfail_str     db      "unable to release$"
 help_str        db      "help",13,10
                 db      "/B[+/-] - enable\disable banked VESA modes booster",13,10
