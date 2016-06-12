@@ -913,8 +913,6 @@ display_status:
                 mov     dx, db_dis
                 int     0x21
 @db_done:
-                mov     dx, crlf
-                int     0x21
                 
                 ; display ramdac width status
                 mov     dx, dd_1
@@ -930,8 +928,6 @@ display_status:
                 mov     dx, dd_dis
                 int     0x21
 @dd_done:
-                mov     dx, crlf
-                int     0x21
                 
                 ; display override memory status
                 mov     dx, dm_1
@@ -970,9 +966,9 @@ display_status:
                 mov     ah, 0x9
                 mov     dx, dm_kb
                 int     0x21
-@dm_done:
                 mov     dx, crlf
                 int     0x21
+@dm_done:
                 
                 ; display "set display start" status
 
@@ -1003,8 +999,6 @@ display_status:
                 mov     dx, ds_retr
                 int     0x21
 @ds_done:
-                mov     dx, crlf
-                int     0x21
                 
                 pop     dx
                 pop     cx
@@ -1012,25 +1006,27 @@ display_status:
                 pop     ax
                 ret
                 
-crlf            db      10,13,"$" 
+crlf            db      13,10,"$" 
 db_1            db      "VESA banked modes booster status: $"
-db_en           db      "enabled$"
-db_dis          db      "disabled$"
+db_en           db      "enabled",13,10,"$"
+db_dis          db      "disabled",13,10,"$"
 
 dd_1            db      "RAMDAC CLUT width setting:        $"
-dd_en           db      "force 6 bit per channel$"
-dd_dis          db      "normal$"
+dd_en           db      "force 6 bit per channel",13,10,"$"
+dd_dis          db      "normal",13,10,"$"
 
 dm_1            db      "VESA available memory size:       $"
-dm_forced       db      " (forced)$"
 dm_kb           db      " KB$"
+dm_forced       db      " (forced)",13,10,"$"
 
 ds_1            db      "'set display start' flag status:  $"
 ds_forced       db      "force $"
 ds_no           db      "no $"
-ds_retr         db      "wait for retrace$"
+ds_retr         db      "wait for retrace",13,10,"$"
 
 ; set mode number patching and mode number table
+; input:  es - resident segment
+; outout: ?
 hujak_info:
                 ; get LFB address
                 mov     dx, 0x3D4
@@ -1136,17 +1132,17 @@ hujak_info:
 info_str        db      "S3 VBE fix TSR v.0.4.1 - by wbc\\bz7 1o.o6.2o16"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
-installed_str   db      "installed",10,13,"$"
-reset_str       db      "reset",10,13,"$"
-released_str    db      "released",10,13,"$"
-relfail_str     db      "unable to release$"
-help_str        db      "help",13,10
+installed_str   db      "installed",13,10,"$"
+reset_str       db      "reset",13,10,"$"
+released_str    db      "released",13,10,"$"
+relfail_str     db      "unable to release",13,10,"$"
+help_str        db      "help",13,10,"$"
                 db      "/B[+/-] - enable\disable banked VESA modes booster",13,10
                 db      "/D[x]   - force RAMDAC CLUT width (/D8 - normal, /D6 - force 6 bit)",13,10
                 db      "/M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)",13,10
                 db      "/S[x]   - 'set display start' mode",13,10
                 db      "          (/S0 - normal, /S1 - force wait for retrace, /S2 - force no wait)",13,10
-                db      "/R, /U  - release from memory$"
+                db      "/R, /U  - release from memory",13,10,"$"
 reset_flag      dw      0
 
 ; some place for mode info block (will be used for initialization)
