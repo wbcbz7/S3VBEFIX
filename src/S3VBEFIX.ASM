@@ -1,11 +1,11 @@
-; s3vbefix main code
-; just tryin' to implement primary stream fifo fetch bug fix
+; s3vbefix main code - wbcbz7 xx.xx.0x7e0
+; blah-blah, read readme.txt and github repo docs for MOAR bullshit! :)
 
 ; use FASM to compile
 
 format binary
 
-; VESA 2.0 mode info block structure
+; VESA info blocks structures
 
 struc VbeInfoBlock {
     .VbeSignature        dd   ?           ; VBE Signature
@@ -76,10 +76,17 @@ virtual at 0
     VbeInfoBlock VbeInfoBlock
 end virtual
 
-resident_start equ 40h ; resident start offset
+resident_start      equ     0x40     ; resident start offset
+resident_id         equ     "fK"     ; resident id word
+resident_ver        equ     0x0041   ; resident version, in 0x1234 - 12.3.4 format
+
+check_func          equ     0xCE00   ; installation check function number
+check_in            equ     "ne"     ; installation check key input  word
+check_out           equ     "ko"     ; installation check key output word 
+; pretty nice (and simple) choice, eh? ^.^
 
 start:
-            org     100h
+            org     0x100
             jmp     init
             nop
         
@@ -87,14 +94,20 @@ start:
 realint10:
             org     resident_start
 int10:
-newint10id  dw  "fK"
-inTSR       db  0       ; флаг для проверки на повторный вызов
+newint10id  dw      resident_id
+newint10ver dw      resident_ver
+var_ofs     dw      add_vars    ; additional vars offset
+inTSR       dw      0           ; inner call check flag
             ; resident entry point
 newint10:
             ; check for inner call
             cmp     [cs:inTSR], 1
             jnz     @first_call
-            jmp     dword [cs:int10ofs]
+            ; here is a trick - since fasm doesn't support org as "move assembly
+            ; pointer" we need to build our instruction "by hand"
+            db      0xEA    ; jmp dword ?:?
+int10ofs    dw      ?
+int10seg    dw      ?
             
 @first_call:
             push    ds
@@ -113,6 +126,24 @@ newint10:
             ; check for calling function and doing some conditional branch magic
             ; should be used for patching arguments before INT10h call
             
+            cmp     ax, check_func  ; installaion check invoked
+            jnz     @check_vbe
+            cmp     dx, check_in
+            jnz     @check_vbe
+            ; installation check
+            ; input:  ax    = check_func (see above)
+            ;         dx    = check_in
+            ; output: ax    = 0x0000
+            ;         dx    = check_out
+            ;         es:di = resident entry point
+            mov     ax, ds
+            mov     es, ax
+            xor     ax, ax
+            mov     dx, check_out
+            mov     di, newint10
+            jmp     done_2
+            
+@check_vbe: 
             cmp     ah, 0x4F
             jnz     @invoke
             ; check for VESA calls to patch mode number
@@ -167,12 +198,8 @@ sds_and     db      0xFF
             
 @invoke:
             ; call original handler
-            ; here is a trick - since fasm doesn't support org as "move assembly
-            ; pointer" we need to build our instruction "by hand"
             pushf
-            db      0x9A    ; call dword ?:?
-int10ofs    dw      ?
-int10seg    dw      ?
+            call    dword [int10ofs]
 
             push    ax
             push    bx
@@ -494,12 +521,13 @@ patch_mode:
 @patch_done:pop     ax
             ret                  
             
+add_vars:
 ; additional vars
 fakememsize dw      0 ; fake memory size (set via /Mx, 0 - BIOS default)
 lfb_size    db      0 ; LFB size (0x3d4 index 0x58)
 lfb_addr    dw      0 ; LFB address bits 16-31 (saved for booster)
             
-; mode number patch table (filled by transient path)
+; mode number patch table (filled by transient part)
 ; format - [src_modenum], [dst_modenum], ... , 0xFF
 ; only low bytes are stored
 mode_xlat   db      (10*2 + 1) dup 0xFF  ; for security reasons
@@ -525,7 +553,9 @@ init:
                 mov     ax, 3510h
                 int     21h                 ; get int10h vector
                 
-                cmp     word [es:bx - (newint10 - newint10id)], "fK"  ; check for signature
+                cmp     word [es:bx - (newint10 - newint10id) ], resident_id    ; check for signature
+                jnz     parse
+                cmp     word [es:bx - (newint10 - newint10ver)], resident_ver   ; check for signature
                 jnz     parse
                 inc     bp                  ; if already installed
 parse:
@@ -657,7 +687,7 @@ booster_parse:
 build:
                 ; build it! :)
                 mov     ah, 9
-                or      bp, bp
+                test    bp, bp
                 jnz     installed
                 
                 ; install resident
@@ -783,7 +813,7 @@ restore_lfb:
 ; input: es - resident segment
 ; output: nope, immediate exit from application
 release:        mov     ah, 9                   ; remove us
-                or      bp, bp
+                test    bp, bp
                 jz      cant_release
                 
                 mov     dx, released_str
