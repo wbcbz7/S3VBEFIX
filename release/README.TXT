@@ -1,7 +1,7 @@
 
  < logo placeholder >
 
-            S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.4.1
+            S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.5.0
        blah-blah copyleft (cl) 2o16 by Artem Vasilev - wbc \\ b-state
  . _ _____________________________________________________________________ _ .
 
@@ -112,28 +112,62 @@
  be expanded, for example:
   "S3VBEFIX.COM /BOOSTER=+ /MEMORY=8" and "S3VBEFIX.COM -b+ -m8" are same.
 
- 0x5. bugs?
+ 0x5. internal int10 api and TSR tech info
+
+   pretty simple and silly, mainly used by installation check.
+   input:  AX    = 0xCE00
+           DX    = 0x656E ('ne') -.
+   output: AX    = 0x0000          > (pretty nice, eh? ^.^)
+           DX    = 0x6F6B ('ko') -'
+           ES:BX = int10 handler entrypoint
+
+   additional available vars:
+    word ptr ES:[BX-8] - S3VBEFIX signature = 'fK'
+    word ptr ES:[BX-6] - S3VBEFIX version in packed format (0x1234 - v.12.3.4)
+    word ptr ES:[BX-4] - internal variables offset (refer to asm source)
+    word ptr ES:[BX-2] - inTSR flag (0x0001 if inner int10 call was invoked)
+   dword ptr ES:[BX+9] - previous int10 handler pointer
+
+ - if AX and DX are not equal to output values then S3VBEFIX is not loaded.
+ - if ES:BX returned by this function != ES:BX returned by int0x21 AX=0x3510
+   then S3VBEFIX is NOT last in int10 chain, therefore it CANNOT be unloaded
+ - you can temporary disable S3VBEFIX by setting inTSR flag to 0x0001, set it
+   to zero for normal function.
+ - YES, S3VBEFIX almost always uses self-modifying code for variable settings
+   (enable\disable booster, "set display start" flag, RAMDAC width blah-blah)
+   and there is no way to get version-independent locations of these vars, so
+   it can be changed ONLY by transient part of compatible version of S3VBEFIX.
+   maybe some holes in PSP will be used for this purpose.
+ - ..ah, yes, currently S3VBEFIX overlaps PSP a bit, starting at offset CS:0x40
+   but you can change it in .asm file before compilation, and thus you should
+   NOT assume than TSR is always starts from this offset.
+ - mode number patch table can destroy VESA mode table during initialization
+   if number of 320x??? modes are greater than 10 in total (this will never
+   occur on S3 built-in VESA 2.0 interface but DOSBox can crack it, yessss! :)
+
+ 0x6. bugs?
    if you got them, contact with me
  
- 0x6. plans?
+ 0x7. plans?
    in TODO.TXT
 
- 0x7. source code?
+ 0x8. source code?
    in GitHub repository: https://github.com/wbcbz7/S3VBEFIX
 
- 0x8. how to contact me?
+ 0x9. how to contact me?
    mailto:wbc.bz7(at)gmail.com or telegram (at)wbcbz7 or irc.forestnet.org/#z80
    vogons.org - wbc, phantom.sannata.ru and other sites - wbcbz7
 
- 0x9. greetings
+ 0xA. greetings
    - #z80 irc channnel users
    - demoscene pals - well, pretty big list here :)
      diver4d, prof4d, nyuk, kowalski, introspec, n1k-o, nodeus, mmcm, scl^mc,
      mmcm, psndcj, wbr, blackcat\eracg, xlat, buddy, quiet, grachev, vbi, tsl,
      g0blinish, denpopov, dman_pcb, bitl, f0x, manwe and da russian scene!
      sensensthal, hellmood, optimus, orby, branch, mikron, demosplash staff,
-     fsqrt, factor6, yerzmyey and ofcoz others because we rulez!
-   - vogoners - keropi, phil, leileilol, gerwin, vetz and all coders.
+     fsqrt, factor6, yerzmyey, scali, trixter, reengine, phoenix, rrrola
+     and ofcoz others because we rulez!
+   - vogoners - keropi, phil, leileilol, gerwin, vetz, elianda, feipoa and all.
    - hello world! :)
 
  that's all! :)

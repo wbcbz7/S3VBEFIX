@@ -78,7 +78,7 @@ end virtual
 
 resident_start      equ     0x40     ; resident start offset
 resident_id         equ     "fK"     ; resident id word
-resident_ver        equ     0x0041   ; resident version, in 0x1234 - 12.3.4 format
+resident_ver        equ     0x0050   ; resident version, in 0x1234 - 12.3.4 format
 
 check_func          equ     0xCE00   ; installation check function number
 check_in            equ     "ne"     ; installation check key input  word
@@ -135,12 +135,12 @@ int10seg    dw      ?
             ;         dx    = check_in
             ; output: ax    = 0x0000
             ;         dx    = check_out
-            ;         es:di = resident entry point
+            ;         es:bx = resident entry point
             mov     ax, ds
             mov     es, ax
             xor     ax, ax
             mov     dx, check_out
-            mov     di, newint10
+            mov     bx, newint10
             jmp     done_2
             
 @check_vbe: 
@@ -548,16 +548,35 @@ init:
                 
                 mov     ah, 9
                 mov     dx, info_str
-                int     21h
+                int     0x21
                 
-                mov     ax, 3510h
-                int     21h                 ; get int10h vector
+                ; check for already installed
+                mov     ax, 0x3510
+                int     0x21                 ; get int10h vector
+                push    es
+                pop     gs
+                
+                ; installation check via int10
+                mov     ax, check_func
+                mov     dx, check_in
+                int     0x10
+                test    ax, ax
+                jnz     parse               ; not installed
+                cmp     dx, check_out
+                jnz     parse               ; not installed
                 
                 cmp     word [es:bx - (newint10 - newint10id) ], resident_id    ; check for signature
+                jnz     parse               ; NOT INSTALLED
+                cmp     word [es:bx - (newint10 - newint10ver)], resident_ver   ; check for version
+                jnz     parse               ; NOT INSTALLED!!!1 (arrrgh!)
+                
+                or      bp, 1               ; installed
+                ; check if our resident is last in chain
+                mov     ax, es
+                mov     cx, gs
+                cmp     ax, cx
                 jnz     parse
-                cmp     word [es:bx - (newint10 - newint10ver)], resident_ver   ; check for signature
-                jnz     parse
-                inc     bp                  ; if already installed
+                or      bp, 2               ; last in chain
 parse:
                 ; зануляем часть переменных
                 xor     ax, ax
@@ -813,8 +832,8 @@ restore_lfb:
 ; input: es - resident segment
 ; output: nope, immediate exit from application
 release:        mov     ah, 9                   ; remove us
-                test    bp, bp
-                jz      cant_release
+                cmp     bp, 3
+                jnz     cant_release
                 
                 mov     dx, released_str
                 int     21h 
@@ -835,6 +854,15 @@ release:        mov     ah, 9                   ; remove us
                 jmp     done
                 
 cant_release:   mov     dx, relfail_str
+                int     21h
+                test    bp, bp
+                jz      notinst
+                
+                mov     dx, notlast_str
+                int     21h
+                jmp     done
+                
+notinst:        mov     dx, notinst_str
                 int     21h
 
 done:           int     20h                  ; and now we can exit (yes!)
@@ -1037,19 +1065,19 @@ display_status:
                 ret
                 
 crlf            db      13,10,"$" 
-db_1            db      "VESA banked modes booster status: $"
+db_1            db      "- VESA banked modes booster status: $"
 db_en           db      "enabled",13,10,"$"
 db_dis          db      "disabled",13,10,"$"
 
-dd_1            db      "RAMDAC CLUT width setting:        $"
+dd_1            db      "- RAMDAC CLUT width setting:        $"
 dd_en           db      "force 6 bit per channel",13,10,"$"
 dd_dis          db      "normal",13,10,"$"
 
-dm_1            db      "VESA available memory size:       $"
+dm_1            db      "- VESA available memory size:       $"
 dm_kb           db      " KB$"
 dm_forced       db      " (forced)",13,10,"$"
 
-ds_1            db      "'set display start' flag status:  $"
+ds_1            db      "- 'set display start' flag status:  $"
 ds_forced       db      "force $"
 ds_no           db      "no $"
 ds_retr         db      "wait for retrace",13,10,"$"
@@ -1159,13 +1187,15 @@ hujak_info:
                 add     si, 2
                 ret
 
-info_str        db      "S3 VBE fix TSR v.0.4.1 - by wbc\\bz7 1o.o6.2o16"
+info_str        db      "S3 VBE fix TSR v.0.5.0 - by wbc\\bz7 13.o6.2o16"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
-installed_str   db      "installed",13,10,"$"
-reset_str       db      "reset",13,10,"$"
+installed_str   db      "installed",13,10,13,10,"$"
+reset_str       db      "reset",13,10,13,10,"$"
 released_str    db      "released",13,10,"$"
-relfail_str     db      "unable to release",13,10,"$"
+relfail_str     db      8,8,8,"   ",13,10,"unable to release - $"
+notlast_str     db      "not last in chain",13,10,"$"
+notinst_str     db      "not installed",13,10,"$"
 help_str        db      "help",13,10,"$"
                 db      "/B[+/-] - enable\disable banked VESA modes booster",13,10
                 db      "/D[x]   - force RAMDAC CLUT width (/D8 - normal, /D6 - force 6 bit)",13,10
