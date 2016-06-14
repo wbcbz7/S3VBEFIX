@@ -286,7 +286,8 @@ fix_fetch:
             call    unlock_extensions
             
             mov     al, 0x90
-            mov     bx, 0x7F00 ; disable fetch
+            db      0xBB    ; mov bx, ?
+fetch_mask  dw      0xFF00
             call    rmw
             
             call    lock_extensions
@@ -710,6 +711,7 @@ build:
                 jnz     installed
                 
                 ; install resident
+                call    get_hwinfo
                 mov     ah, 9
                 mov     dx, installed_str
                 int     21h
@@ -717,6 +719,14 @@ build:
                 call    reset_vars
                 call    hujak_info
                 call    display_status
+                                
+                mov     di, [hw_flag]
+                test    di, 2
+                jz      .partdecode
+                mov     ax, 0x7F00
+                mov     [es:fetch_mask], ax
+.partdecode:    
+
                 jmp     install_done
                 
 installed:
@@ -776,6 +786,7 @@ bcdhex:
                 pop     dx
                 pop     bx
                 ret
+;----
                 
 ; hex to bcd -> stdout converter 
 ; input:  ax - number
@@ -807,6 +818,7 @@ hexbcd:
                 pop     cx
                 pop     bx
                 ret
+;----
                 
 ; restore LFB address
 ; input: es - resident segment
@@ -827,6 +839,7 @@ restore_lfb:
                 out     dx, ax
                 call    (lock_extensions + (realint10 - resident_start))
                 ret
+;----
                 
 ; release resident from memory
 ; input: es - resident segment
@@ -945,7 +958,9 @@ reset_vars:
                 mov     [es:cap_and], al
                 
 @reset_skip8:
+
                 ret
+;----
 
 ; display curent TSR status
 ; input:  es - resident segment
@@ -1082,9 +1097,64 @@ ds_forced       db      "force $"
 ds_no           db      "no $"
 ds_retr         db      "wait for retrace",13,10,"$"
 
+;----
+; check for hardware environment
+; input/output: ?
+get_hwinfo:
+                ; check for S3 card installed
+                ; warning: may screw up some hardware registers on other cards!
+                mov     dx, 0x3d4
+                call    (lock_extensions + (realint10 - resident_start))
+                mov     al, 0x30        ; s3 old chip id (NOT unlocked!)
+                out     dx, al
+                inc     dx
+                in      al, dx
+                mov     ah, al
+                dec     dx
+                push    ax
+                call    (unlock_extensions + (realint10 - resident_start))
+                pop     ax
+                mov     al, 0x30        ; s3 old chip id
+                out     dx, al
+                inc     dx
+                in      al, dx
+                dec     dx
+                cmp     al, ah
+                jz      .not_inst
+                or      [hw_flag], 1
+                
+                ; check for crtc regs decoding
+                ; if b7 of reg index is not decoded then i.e. reg0x10 and reg0x90 are same
+                mov     al, 0x10        ; vertical retrace start position
+                out     dx, al
+                inc     dx
+                in      al, dx
+                mov     ah, al
+                dec     dx
+                mov     al, 0x90        ; primary stream fifo fetch
+                out     dx, al
+                inc     dx
+                in      al, dx
+                dec     dx
+                cmp     al, ah
+                jnz     .decode
+                or      [hw_flag], 2    ; crtc reg0x90 is available
+.decode:
+                call    (lock_extensions + (realint10 - resident_start))
+                ret
+                
+.not_inst:
+                ; if S3 card is not installed at all - GET OUT THERE!!1!!1! :)
+                mov     ah, 0x9
+                mov     dx, notinst_str
+                int     0x21
+                mov     dx, nots3_str
+                int     0x21
+                jmp     done
+
 ; set mode number patching and mode number table
 ; input:  es - resident segment
-; outout: ?
+; output: ?
 hujak_info:
                 ; get LFB address
                 mov     dx, 0x3D4
@@ -1186,6 +1256,7 @@ hujak_info:
                 
                 add     si, 2
                 ret
+;----
 
 info_str        db      "S3 VBE fix TSR v.0.5.0 - by wbc\\bz7 13.o6.2o16"
 dash_str        db      " - $"                                      ; small trick here
@@ -1195,7 +1266,8 @@ reset_str       db      "reset",13,10,13,10,"$"
 released_str    db      "released",13,10,"$"
 relfail_str     db      8,8,8,"   ",13,10,"unable to release - $"
 notlast_str     db      "not last in chain",13,10,"$"
-notinst_str     db      "not installed",13,10,"$"
+notinst_str     db      8,8,8,"   ",13,10,"not installed - $"
+nots3_str       db      "can't find S3 graphics card",13,10,"$"
 help_str        db      "help",13,10,"$"
                 db      "/B[+/-] - enable\disable banked VESA modes booster",13,10
                 db      "/D[x]   - force RAMDAC CLUT width (/D8 - normal, /D6 - force 6 bit)",13,10
@@ -1204,6 +1276,7 @@ help_str        db      "help",13,10,"$"
                 db      "          (/S0 - normal, /S1 - force wait for retrace, /S2 - force no wait)",13,10
                 db      "/R, /U  - release from memory",13,10,"$"
 reset_flag      dw      0
+hw_flag         dw      0
 
 ; some place for mode info block (will be used for initialization)
 vbeinfo_transient:
