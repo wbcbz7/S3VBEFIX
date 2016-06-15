@@ -1,7 +1,7 @@
 
  < logo placeholder >
 
-            S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.5.0
+            S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.5.1
        blah-blah copyleft (cl) 2o16 by Artem Vasilev - wbc \\ b-state
  . _ _____________________________________________________________________ _ .
 
@@ -146,7 +146,11 @@
    occur on S3 built-in VESA 2.0 interface but DOSBox can crack it, yessss! :)
 
  0x6. bugs?
-   if you got them, contact with me
+ - VBETEST.EXE and /M[x] key
+   VBETEST from SciTech Display Doctor can crash while attempting to scroll a
+   virtual wide\tall screen if /M[x] key is used.
+
+   if you got some more bugs, contact with me
  
  0x7. plans?
    in TODO.TXT

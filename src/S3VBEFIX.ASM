@@ -78,7 +78,7 @@ end virtual
 
 resident_start      equ     0x40     ; resident start offset
 resident_id         equ     "fK"     ; resident id word
-resident_ver        equ     0x0050   ; resident version, in 0x1234 - 12.3.4 format
+resident_ver        equ     0x0051   ; resident version, in 0x1234 - 12.3.4 format
 
 check_func          equ     0xCE00   ; installation check function number
 check_in            equ     "ne"     ; installation check key input  word
@@ -590,7 +590,7 @@ parse:
                 ; parse command line
                 mov     si, 80h
                 lodsb
-                or      al, al
+                test    al, al
                 jz      no_params           ; empty commandline
                 
                 movzx   cx, al
@@ -1137,7 +1137,7 @@ get_hwinfo:
                 in      al, dx
                 dec     dx
                 cmp     al, ah
-                jnz     .decode
+                jz      .decode
                 or      [hw_flag], 2    ; crtc reg0x90 is available
 .decode:
                 call    (lock_extensions + (realint10 - resident_start))
@@ -1258,7 +1258,7 @@ hujak_info:
                 ret
 ;----
 
-info_str        db      "S3 VBE fix TSR v.0.5.0 - by wbc\\bz7 13.o6.2o16"
+info_str        db      "S3 VBE fix TSR v.0.5.1 - by wbc\\bz7 15.o6.2o16"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
 installed_str   db      "installed",13,10,13,10,"$"
