@@ -866,7 +866,9 @@ release:        mov     ah, 9                   ; remove us
                 int     21h
                 jmp     done
                 
-cant_release:   mov     dx, relfail_str
+cant_release:   mov     dx, zap_str
+                int     0x21
+                mov     dx, relfail_str
                 int     21h
                 test    bp, bp
                 jz      notinst
@@ -876,6 +878,8 @@ cant_release:   mov     dx, relfail_str
                 jmp     done
                 
 notinst:        mov     dx, notinst_str
+                int     21h
+                mov     dx, crlf
                 int     21h
 
 done:           int     20h                  ; and now we can exit (yes!)
@@ -1146,7 +1150,11 @@ get_hwinfo:
 .not_inst:
                 ; if S3 card is not installed at all - GET OUT THERE!!1!!1! :)
                 mov     ah, 0x9
+                mov     dx, zap_str
+                int     0x21
                 mov     dx, notinst_str
+                int     0x21
+                mov     dx, dash_str
                 int     0x21
                 mov     dx, nots3_str
                 int     0x21
@@ -1264,11 +1272,12 @@ already_str     db      "already $"
 installed_str   db      "installed",13,10,13,10,"$"
 reset_str       db      "reset",13,10,13,10,"$"
 released_str    db      "released",13,10,"$"
-relfail_str     db      8,8,8,"   ",13,10,"unable to release - $"
+zap_str         db      8,8,8,"   ",13,10,"$"
+relfail_str     db      "unable to release - $"
 notlast_str     db      "not last in chain",13,10,"$"
-notinst_str     db      8,8,8,"   ",13,10,"not installed - $"
+notinst_str     db      "not installed$"
 nots3_str       db      "can't find S3 graphics card",13,10,"$"
-help_str        db      "help",13,10,"$"
+help_str        db      "help",13,10,13,10
                 db      "/B[+/-] - enable\disable banked VESA modes booster",13,10
                 db      "/D[x]   - force RAMDAC CLUT width (/D8 - normal, /D6 - force 6 bit)",13,10
                 db      "/M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)",13,10
