@@ -230,6 +230,8 @@ patchedmode dw      ?
             jz      patch_modeinfo
             cmp     al, 0x2     ; Function 02h - Set VBE Mode
             jz      patch_modeset
+            cmp     al, 0x6     ; Function 06h - Set/Get Logical Scan Line Length
+            jz      patch_setscanlinelen
 
 done_iret:
             ; all done, reset inTSR flag and quit from ISR
@@ -498,6 +500,29 @@ bankproc:
 @bankproc_done:
             pop     cx
             retf
+
+; VESA function 0x6 patcher
+; just recalculate maximum number of scanlines
+
+patch_setscanlinelen:
+            ; check for overriden memsize
+            mov     ax, [fakememsize] 
+            test    ax, ax
+            jz      done_iret
+
+            ; and then...do stack frame hacking :)
+            push    bp
+            mov     bp, sp
+            ; stack frame: sp   - old_bp; sp+2 - out_dx; sp+4 - out_cx;
+            ;              sp+6 - out_bx; sp+8 - out_ax
+            
+            mov     dx, ax
+            xor     ax, ax
+            div     word [ss:bp+6]  ; out_bx = new bytes per scanline
+            mov     [ss:bp+2], ax   ; ax     = new max number of scanlines
+            
+            pop     bp
+            jmp     done_iret
             
 ; replace current VESA mode number with other (used for mode info block patching)
 ; input:  BX - VESA mode number; DS:SI - address of replacement table
