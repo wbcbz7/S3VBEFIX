@@ -322,46 +322,9 @@ patch_modeinfo:
             mov     ax, bankproc
             mov     word [es:di + ModeInfoBlock.WinFuncPtr    ], ax
 
-            ; check for overriden memsize
-            mov     ax, [fakememsize] 
-            test    ax, ax
-            jz      @modenum_check
-            
-            push    cx
-            push    dx
-            
-            ; warning - 32bit regs inside! :)
-            movzx   ebx, word [es:di + ModeInfoBlock.BytesPerScanLine]
-            movzx   ecx, word [es:di + ModeInfoBlock.YResolution]
-            
-            imul    ebx, ecx        ; page size in bytes
-            add     ebx, 0xFFFF     ; ceil(ebx)
-            shr     ebx, 16         ; page size in 64kb blocks (inaccurate but who cares? :)
-            
-            xor     dx, dx
-            idiv    bx              ; ax - number of pages
-            
-            pop     dx
-            pop     cx
-            
-            test    ax, ax          ; numofpages = 0?
-            jz      @not_avail      ; mode is not available in fact
-            
-            ; if avail - set new pages value
-            dec     al
-            mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
-            jmp     @modenum_check
-            
-@not_avail:            
-            ; set "not supported" flag
-            mov     ax, [es:di + ModeInfoBlock.ModeAttributes]
-            and     ax, 0xFFFE
-            mov     [es:di + ModeInfoBlock.ModeAttributes], ax
-            
-@modenum_check:
             ; check for modenum is patched
             cmp     cx, dx
-            jz      done_iret
+            jz      .memsize_chk
             
             ; set 400 pixel height
             mov     ax, [es:di + ModeInfoBlock.YResolution]
@@ -374,6 +337,38 @@ patch_modeinfo:
             shr     al, 1
             dec     al
             mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
+            
+.memsize_chk:
+            ; check for overriden memsize
+            mov     ax, [fakememsize] 
+            test    ax, ax
+            jz      done_iret
+            
+            push    ax
+            mov     ax, [es:di + ModeInfoBlock.BytesPerScanLine]
+            mov     bx, [es:di + ModeInfoBlock.YResolution]
+            mul     bx              ; dx:ax - page size in bytes
+            add     ax, 0xFFFF
+            adc     dx, 0           ; ceil(dx:ax)
+            
+            mov     bx, dx          ; bx - page size in 64kb blocks (inaccurate but who cares? :)
+            xor     dx, dx
+            pop     ax
+            div     bx              ; ax - number of pages
+            
+            test    ax, ax          ; numofpages = 0?
+            jz      .not_avail      ; mode is not available in fact
+            
+            ; if avail - set new pages value
+            dec     al
+            mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
+            jmp     done_iret
+            
+.not_avail:            
+            ; set "not supported" flag
+            mov     ax, [es:di + ModeInfoBlock.ModeAttributes]
+            and     ax, 0xFFFE
+            mov     [es:di + ModeInfoBlock.ModeAttributes], ax
             
             jmp     done_iret
             
