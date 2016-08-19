@@ -1,7 +1,7 @@
 
  < logo placeholder >
 
-            S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.5.1
+            S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.5.2
        blah-blah copyleft (cl) 2o16 by Artem Vasilev - wbc \\ b-state
  . _ _____________________________________________________________________ _ .
 
@@ -146,9 +146,21 @@
    occur on S3 built-in VESA 2.0 interface but DOSBox can crack it, yessss! :)
 
  0x6. bugs?
+
+ - /M[x] key quirks
+   Do NOT set fake memsize bigger than available memory size, otherwise you can
+   get nasty crashes and hangups when trying to use double\triple buffer in
+   some applications.
+   By the way, owners of >=64 MB videocards - memory size will be displayed
+   incorrectly, and I can't guarantee that S3VBEFIX will work correctly in
+   these cases (but I hope it will :)
+  
+
+ fixed bugs:
  - VBETEST.EXE and /M[x] key
    VBETEST from SciTech Display Doctor can crash while attempting to scroll a
    virtual wide\tall screen if /M[x] key is used.
+   >>fixed after adding function 0x4F06 fix
 
    if you got some more bugs, contact with me
  
