@@ -361,6 +361,13 @@ patch_modeinfo:
             test    ax, ax          ; numofpages = 0?
             jz      .not_avail      ; mode is not available in fact
             
+            ; check for pagenum >= 128
+            ; some LAME apps treat this field as signed byte (//_-)
+            cmp     ax, 128
+            jb      .pagenum_ok
+            ; clip it
+            mov     ax, 127
+.pagenum_ok:
             ; if avail - set new pages value
             dec     al
             mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
