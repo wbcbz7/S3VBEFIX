@@ -1,4 +1,4 @@
-; s3vbefix main code - wbcbz7 xx.xx.0x7e0
+; s3vbefix main code - wbcbz7 xx.xx.0x7e0-xx.xx.0x7e6
 ; blah-blah, read readme.txt and github repo docs for MOAR bullshit! :)
 
 ; use FASM to compile
@@ -78,12 +78,19 @@ end virtual
 
 resident_start      equ     0x40     ; resident start offset
 resident_id         equ     "fK"     ; resident id word
-resident_ver        equ     0x0052   ; resident version, in 0x1234 - 12.3.4 format
+resident_ver        equ     0x0060   ; resident version, in 0x1234 - 12.3.4 format
 
 check_func          equ     0xCE00   ; installation check function number
 check_in            equ     "ne"     ; installation check key input  word
 check_out           equ     "ko"     ; installation check key output word 
 ; pretty nice (and simple) choice, eh? ^.^
+
+; hacky stuff
+; pointer to temporary VESA mode table
+modeinfo_temp   equ     vbeinfo_transient + 512
+modetab_temp    equ     vbeinfo_transient + 512 + 256
+
+; ---------------------------------------- START OF CODE ----------------------------
 
 start:
             org     0x100
@@ -127,9 +134,9 @@ int10seg    dw      ?
             ; should be used for patching arguments before INT10h call
             
             cmp     ax, check_func  ; installaion check invoked
-            jnz     @check_vbe
+            jnz     .check_vbe
             cmp     dx, check_in
-            jnz     @check_vbe
+            jnz     .check_vbe
             ; installation check
             ; input:  ax    = check_func (see above)
             ;         dx    = check_in
@@ -143,14 +150,13 @@ int10seg    dw      ?
             mov     bx, newint10
             jmp     done_2
             
-@check_vbe: 
+.check_vbe: 
             cmp     ah, 0x4F
             jnz     @invoke
+
             ; check for VESA calls to patch mode number
-            mov     si, mode_xlat
-            
             cmp     al, 0x1     ; Function 01h  - Get VBE Mode Information
-            jnz     @@f2
+            jnz     .f2
             ; replace mode number
             push    bx
             mov     bx, cx
@@ -159,9 +165,9 @@ int10seg    dw      ?
             mov     cx, bx
             pop     bx
             
-@@f2:
+.f2:
             cmp     al, 0x2     ; Function 02h  - Set VBE Mode
-            jnz     @@f5
+            jnz     .f5
             ; replace mode number
             call    patch_mode
             mov     [patchedmode], bx
@@ -179,14 +185,14 @@ int10seg    dw      ?
             pop     ax
             or      bh, 0x80
             
-@@f5:
+.f5:
             cmp     al, 0x5     ; Function 05h - Display Window Control
-            jnz     @@f7
+            jnz     .f7
             push    cs
             call    bankproc    ; perform far call
             jmp     done_2
             
-@@f7:
+.f7:
             cmp     al, 0x7     ; Function 07h - Set/Get Display Start
             jnz     @invoke
             ; clear "wait for retrace" flag
@@ -296,42 +302,50 @@ fetch_mask  dw      0xFF00
             
             jmp     done_iret
             
+            ; ----------------------
             ; VESA function 0x0 patch
 patch_vbeinfo:
-            mov     ax, cs
-            mov     word [es:di + VbeInfoBlock.VideoModePtr + 2], ax
-            mov     ax, mode_table
-            mov     word [es:di + VbeInfoBlock.VideoModePtr    ], ax
-            
+
+            ; patch VBE version
+            mov     ax, [vbever]
+            mov     [es:di + VbeInfoBlock.VbeVersion], ax
+
+            ; patch mode table if requested
+            mov     ax, [modetabptr]
+            test    ax, ax
+            jz      .modetab_skip
+
+            mov     [es:di + VbeInfoBlock.VideoModePtr + 2], cs
+            mov     [es:di + VbeInfoBlock.VideoModePtr    ], ax
+.modetab_skip:
+
+            ; patch capabilities
             mov     al, byte [es:di + VbeInfoBlock.Capabilities]
             db      0x24  ; and al, ?
 cap_and     db      0xFF
             mov     byte [es:di + VbeInfoBlock.Capabilities], al
             
+            ; override memory size
             mov     ax, [fakememsize] 
             test    ax, ax
-            jz      done_iret
+            jz      .memsize_skip
             
-            ; override memory size
             mov    [es:di + VbeInfoBlock.TotalMemory], ax
-            
+        
+.memsize_skip:
             jmp     done_iret
             
             ; VESA function 0x1 patch
 patch_modeinfo:
-            mov     ax, cs
-            mov     word [es:di + ModeInfoBlock.WinFuncPtr + 2], ax
-            mov     ax, bankproc
-            mov     word [es:di + ModeInfoBlock.WinFuncPtr    ], ax
+            mov     word [es:di + ModeInfoBlock.WinFuncPtr + 2], cs
+            mov     word [es:di + ModeInfoBlock.WinFuncPtr    ], bankproc
 
             ; check for modenum is patched
             cmp     cx, dx
             jz      .memsize_chk
             
-            ; set 400 pixel height
-            mov     ax, [es:di + ModeInfoBlock.YResolution]
-            shl     ax, 1
-            mov     [es:di + ModeInfoBlock.YResolution], ax
+            ; double the pixel height
+            shl     word [es:di + ModeInfoBlock.YResolution], 1
             
             ; divide page number by two
             mov     al, [es:di + ModeInfoBlock.NumberOfImagePages]
@@ -341,44 +355,63 @@ patch_modeinfo:
             mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
             
 .memsize_chk:
+            ; check for gamma correction override
+            mov     al, [gamma_en]
+            test    al, al
+            jz      .skip_gamma
+
+            ; check if direct color mode
+            mov     al, [es:di + ModeInfoBlock.MemoryModel]
+            cmp     al, 6
+            jnz     .skip_gamma
+
+            ; indicate gamma correction support + reserved bits are unused
+            mov     byte [es:di + ModeInfoBlock.DirectColorModeInfo], 3
+
+.skip_gamma:
+
+            ; get page count
+            xor     ax, ax
+            mov     al, [es:di + ModeInfoBlock.NumberOfImagePages]
+            inc     ax
+
+.memsize_check:
             ; check for overriden memsize
-            mov     ax, [fakememsize] 
-            test    ax, ax
-            jz      done_iret
+            mov     bx, [fakememsize] 
+            test    bx, bx
+            jz      .pagecount_check
             
-            push    ax
-            mov     ax, [es:di + ModeInfoBlock.BytesPerScanLine]
-            mov     bx, [es:di + ModeInfoBlock.YResolution]
-            mul     bx              ; dx:ax - page size in bytes
+            mov     ax,  [es:di + ModeInfoBlock.BytesPerScanLine]
+            mul     word [es:di + ModeInfoBlock.YResolution]        ; dx:ax - page size in bytes
             add     ax, 0xFFFF
             adc     dx, 0           ; ceil(dx:ax)
             
-            mov     bx, dx          ; bx - page size in 64kb blocks (inaccurate but who cares? :)
+            mov     cx, dx          ; cx    - pagesize in 64kb blocks (inaccurate but who cares? :)
             xor     dx, dx
-            pop     ax
-            div     bx              ; ax - number of pages
+            mov     ax, bx          ; dx:ax - mem size in 64kb blocks
+            div     cx              ; ax    - number of pages
             
             test    ax, ax          ; numofpages = 0?
             jz      .not_avail      ; mode is not available in fact
             
+.pagecount_check:
             ; check for pagenum >= 128
             ; some LAME apps treat this field as signed byte (//_-)
-            cmp     ax, 128
-            jb      .pagenum_ok
+            cmp     ax, 127
+            jb      .pagecount_ok
             ; clip it
             mov     ax, 127
-.pagenum_ok:
+.pagecount_ok:
             ; if avail - set new pages value
-            dec     al
+            dec     ax
             mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
             jmp     done_iret
             
-.not_avail:            
+.not_avail:
             ; set "not supported" flag
-            mov     ax, [es:di + ModeInfoBlock.ModeAttributes]
-            and     ax, 0xFFFE
-            mov     [es:di + ModeInfoBlock.ModeAttributes], ax
+            and     word [es:di + ModeInfoBlock.ModeAttributes], 0xFFFE
             
+            ; done
             jmp     done_iret
             
             ; VESA function 0x2 patch
@@ -387,25 +420,27 @@ patch_modeset:
             cmp     bx, 0x100
             jb      fix_fetch
             
-            ; check for modenum is patched
+            ; check for modenum is patched (== 320x400/480 mode)
             cmp     bx, dx
             jz      modeset_booster
             
+            ; set scanline height = 1
+            push    bx
             mov     dx, 0x3D4
-            
-            ; set scanline height = 1       
             mov     al, 0x9
             mov     bx, 0x6000
             call    rmw
+            pop     bx
             
 modeset_booster:
-            db      0xB8                ; mov ax, ?
-booster_en  dw      0                   ; booster flag (nonzero - enabled)
-            test    ax, ax
-            jz      done_iret           ; booster not enabled
-            ; BOOSTAH! :)
             mov     dx, 0x3D4
             call    unlock_extensions
+            db      0xB0                ; mov al, ?
+booster_en  db      0                   ; booster flag (nonzero - enabled)
+            test    al, al
+            jz      booster_done        ; booster not enabled
+
+            ; BOOSTAH! :)
             test    bx, 0x4000
             jnz     booster_lfb
             
@@ -453,6 +488,51 @@ booster_lfb:
             out     dx, ax
             
 booster_done:
+
+            ; check if enable gamma correction
+            db      0xB0        ; mov al, ?
+gamma_en    db      0x00
+            test    al, al
+            jz      gamma_en_skip
+
+            ; check if direct color mode
+            mov     al, 0x67
+            out     dx, al
+            inc     dx
+            in      al, dx
+            dec     dx
+            and     al, 0xE0
+            jz      gamma_en_skip
+
+            ; enable gamma correction
+            mov     dx, 0x3C4
+            mov     ax, 0x0608
+            out     dx, ax      ; unlock sequencer extended registers
+
+            mov     al, 0x1B
+            mov     bx, 0xFF18  ; 24bit CLUT, gamma correction enabled
+            call    rmw
+
+            ; upload identity gamma ramp
+            xor     ax, ax
+            mov     dx, 0x3C8
+            out     dx, al
+            inc     dx
+            mov     cx, 256
+.loop:
+            out     dx, al
+            out     dx, al
+            out     dx, al
+            inc     al
+            loop    .loop
+
+            ; lock sequencer extended registers
+            mov     dx, 0x3C4
+            mov     ax, 0x0008
+            out     dx, ax
+
+gamma_en_skip:
+            mov     dx, 0x3D4
             call    lock_extensions
             jmp     done_iret
 
@@ -461,7 +541,7 @@ bankproc:
             push    cx
             
             test    bl, bl              ; check for selected window
-            jnz     @bankproc_fail      ; window B is not supported
+            jnz     .fail               ; window B is not supported
 
             mov     cx, dx
             mov     dx, 0x3D4
@@ -474,37 +554,38 @@ bankproc:
             in      al, dx
             dec     dx
             test    al, 1
-            jz      @bankproc_lfb       ; not supported in VGA or LFB modes
+            jz      .lfb       ; not supported in VGA or LFB modes
             
             mov     al, 0x6A
             ; check for get/set bank
             test    bh, bh
-            jnz     @bankproc_get
+            jnz     .get
             
             ; set new window pos
             mov     ah, cl
             out     dx, ax
             call    lock_extensions
-            jmp     @bankproc_ok
+            jmp     .ok
             
-@bankproc_get:
+.get:
             out     dx, al
             inc     dx
             in      al, dx
+            mov     cl, al      ; FIX: preserve read bank value across lock_extensions
             dec     dx
             call    lock_extensions
-            xor     dx, dx
-            mov     dl, al
             
-@bankproc_ok:
+.ok:
+            xor     dx, dx      ; FIX: return current bank in DX - fix chasm: the rift runtime error 216
+            mov     dl, cl
             mov     ax, 0x004F
-            jmp     @bankproc_done
-@bankproc_fail:
+            jmp     .done
+.fail:
             mov     ax, 0x014F
-            jmp     @bankproc_done
-@bankproc_lfb:
+            jmp     .done
+.lfb:
             mov     ax, 0x034F
-@bankproc_done:
+.done:
             pop     cx
             retf
 
@@ -535,35 +616,41 @@ patch_setscanlinelen:
 ; input:  BX - VESA mode number; DS:SI - address of replacement table
 ; output: BX - patched mode number; SI destroyed          
 patch_mode:
+            mov     si, [modexlatptr]
+            test    si, si
+            jz      .ret
+
             push    ax
-@patch_loop:
-            lodsb
-            cmp     al, 0xFF    ; check for 0xFF terminator
-            jz      @patch_done
-            cmp     bl, al
-            jz      @patch_yep
-            inc     si          ; else adjust table
-            jmp     @patch_loop
-@patch_yep: lodsb
-            mov     bl, al
-@patch_done:pop     ax
+            push    bx
+            and     bx, 0x03FF
+.loop:
+            lodsw
+            cmp     ax, 0xFFFF  ; check for 0xFF terminator
+            jz      .done
+            cmp     bx, ax      ; check for matching value
+            jz      .yep
+            add     si, 2       ; else adjust table
+            jmp     .loop
+.yep:       lodsw
+            mov     bx, ax
+.done:      pop     ax
+            and     ax, not 0x03FF
+            or      bx, ax
+            pop     ax
+.ret:
             ret                  
             
 add_vars:
 ; additional vars
 fakememsize dw      0 ; fake memory size (set via /Mx, 0 - BIOS default)
+vbever      dw 0x0200 ; VBE version overriden
 lfb_size    db      0 ; LFB size (0x3d4 index 0x58)
 lfb_addr    dw      0 ; LFB address bits 16-31 (saved for booster)
+modexlatptr dw      0 ; mode number patch table offset, 0 if absent
+modetabptr  dw      0 ; VESA mode table offset,         0 if absent
             
-; mode number patch table (filled by transient part)
-; format - [src_modenum], [dst_modenum], ... , 0xFF
-; only low bytes are stored
-mode_xlat   db      (10*2 + 1) dup 0xFF  ; for security reasons
-; so why (10*2) + 1? :) well because we can have 320x(200\240) 8\15\16\24\32bpp
-; and we need to expand 'em all (+ termination byte ofcourse)
+; mode list and mode patch table follow here until TSR end
 
-; VESA mode table starts here (with dynamic size)
-mode_table:
 newint10end:
 
 ;--------------------------------------------------------------------------------------------------
@@ -609,7 +696,8 @@ parse:
                 ; зануляем часть переменных
                 xor     ax, ax
                 mov     [memsize_temp], ax
-                mov     [booster_temp], ax
+                mov     [booster_temp], al
+                mov     [gamma_temp], al
                 mov     ax, 0xFF00
                 mov     [sds_mask], ax
                 mov     [cap_temp], ah
@@ -637,6 +725,8 @@ parse:
                 jz      release
                 cmp     al, "B"             ; booster enable\disable
                 jz      booster_parse
+                cmp     al, "G"             ; gamma correction enable\disable
+                jz      gamma_parse
                 cmp     al, "D"             ; force RAMDAC width
                 jz      dacwidth_parse
                 cmp     al, "M"             ; override memory size
@@ -700,11 +790,30 @@ sds_end:
                 or      [reset_flag], 2
                 jmp     @gottaloop
                 
-                ; parse booster enable\disable
-                ; какой-то пиздец здесь :D
 booster_parse:
+                push    bx
+                push    di
+                mov     di, booster_temp
+                mov     bx, 4
+                call    endis_parse
+                pop     di
+                pop     bx
+                jmp     @gottaloop
+
+gamma_parse:
+                push    bx
+                push    di
+                mov     di, gamma_temp
+                mov     bx, 16
+                call    endis_parse
+                pop     di
+                pop     bx
+                jmp     @gottaloop
+
+endis_parse:
+                ; parse enable\disable
                 push    dx
-                mov     dx, 1               ; if /B param present - assume that booster is enabled
+                mov     dx, 1               ; if param present - assume enabled
                 dec     cx
                 jcxz    @bparse_end         ; last param - assume that enabled
 @bparse_loop:
@@ -723,14 +832,15 @@ booster_parse:
 @bparse_gottaloop:
                 loop    @bparse_loop
 @bparse_end:
-                mov     [booster_temp], dx
-                or      [reset_flag], 4
+                mov     [di], dl
+                or      [reset_flag], bx
                 pop     dx
-                jmp     @gottaloop
+                ret
 @bparse_dec:
                 dec     dx                  ; dx = 0
                 jmp     @bparse_end
-                
+
+
 build:
                 ; build it! :)
                 mov     ah, 9
@@ -780,6 +890,19 @@ install_done:   mov     dx, si
                 
 ; SUBPROGRAMS
 
+; hex parser
+; input:  ds:si - string, cx - number of avail chars in string
+; output: ax - number
+hexhex:
+                xor     ax, ax
+                push    bx
+                push    dx
+
+                mov     ax, dx              ; save given number in ax
+                pop     dx
+                pop     bx
+                ret
+
 ; bcd to hex parser
 ; input:  ds:si - string, cx - number of avail chars in string
 ; output: ax - number
@@ -791,24 +914,24 @@ bcdhex:
                 ; get BCD number
                 xor     dx, dx
                 mov     bx, 10              ; multiplier          
-@bcdhex_loop:
+.loop:
                 lodsb
                 cmp     al, 0xA             ; CR
-                jz      @bcdhex_end
+                jz      .end
                 cmp     al, 0xD             ; LF
-                jz      @bcdhex_end
+                jz      .end
                 cmp     al, 0x3A            ; blabla :)
-                ja      @bcdhex_gottaloop
+                ja      .gottaloop
                 cmp     al, 0x30            ; end or invalid param
-                jb      @bcdhex_end          
+                jb      .end          
                 ; else we have char in '0' - '9' range
                 sub     al, 0x30
                 imul    dx, bx              ; dx *= 10    
                 add     dx, ax
-@bcdhex_gottaloop:
-                loop    @bcdhex_loop
+.gottaloop:
+                loop    .loop
                 
-@bcdhex_end:
+.end:
                 mov     ax, dx              ; save given number in ax
                 pop     dx
                 pop     bx
@@ -978,17 +1101,24 @@ reset_vars:
                 test    di, 4
                 jz      @reset_skip4
                 ; set booster flag
-                mov     ax, [booster_temp]
-                mov     [es:booster_en], ax
+                mov     al, [booster_temp]
+                mov     [es:booster_en], al
                 
 @reset_skip4:
                 test    di, 8
                 jz      @reset_skip8
-                ; set booster flag
+                ; set capabilities flag
                 mov     al, [cap_temp]
                 mov     [es:cap_and], al
                 
 @reset_skip8:
+                test    di, 16
+                jz      @reset_skip16
+                ; set gamma flag
+                mov     al, [gamma_temp]
+                mov     [es:gamma_en], al
+
+@reset_skip16:
 
                 ret
 ;----
@@ -1007,8 +1137,8 @@ display_status:
                 mov     dx, db_1
                 int     0x21
                 
-                mov     bx, [es:booster_en]
-                test    bx, bx
+                mov     bl, [es:booster_en]
+                test    bl, bl
                 jz      @db_dis
                 mov     dx, db_en
                 int     0x21
@@ -1032,6 +1162,20 @@ display_status:
                 mov     dx, dd_dis
                 int     0x21
 @dd_done:
+                ; display gamma correction status
+                mov     dx, dg_1
+                int     0x21
+
+                mov     al, [es:gamma_en]
+                test    al, al
+                jz      @dg_dis
+                mov     dx, db_en
+                int     0x21
+                jmp     @dg_done
+@dg_dis:
+                mov     dx, db_dis
+                int     0x21
+@dg_done:
                 
                 ; display override memory status
                 mov     dx, dm_1
@@ -1118,6 +1262,8 @@ db_dis          db      "disabled",13,10,"$"
 dd_1            db      "- RAMDAC CLUT width setting:        $"
 dd_en           db      "force 6 bit per channel",13,10,"$"
 dd_dis          db      "normal",13,10,"$"
+
+dg_1            db      "- Hi/TrueColor gamma correction:    $"
 
 dm_1            db      "- VESA available memory size:       $"
 dm_kb           db      " KB$"
@@ -1225,14 +1371,16 @@ hujak_info:
                 ; вместо int 10h здесь будет прямой вызов старого обработчика
                 pushf
                 call    dword [int10ofs]
+
+                ; set mode patch table pointer
+                mov     ax, newint10end
+                mov     [modexlatptr], ax
                 
                 ; copy mode table
-                mov     ax, word [cs:vbeinfo_transient + VbeInfoBlock.VideoModePtr + 2]
-                mov     ds, ax
-                mov     ax, word [cs:vbeinfo_transient + VbeInfoBlock.VideoModePtr    ]
-                mov     si, ax
+                mov     ds, word [cs:vbeinfo_transient + VbeInfoBlock.VideoModePtr + 2]
+                mov     si, word [cs:vbeinfo_transient + VbeInfoBlock.VideoModePtr    ]
                 
-                mov     di, mode_table
+                mov     di, modetab_temp
                 
 @modetab_copy_loop:
                 lodsw
@@ -1242,17 +1390,18 @@ hujak_info:
                 jmp     @modetab_copy_loop
                 
 @modetab_copy_done:
+                ; di points to mode table end (without 0xFFFF terminator)
+
                 ; now scan this table for 320x(something) modes for patching
                 mov     ax, es
                 mov     ds, ax 
                 
-                mov     dx, 0x180   ; первый режим по списку, "созданный" нами
-                mov     ax, word [cs:vbeinfo_transient + VbeInfoBlock.VideoModePtr + 2]
-                mov     fs, ax
+                mov     dx, 0x1F0   ; первый режим по списку, "созданный" нами
+                mov     fs, word [cs:vbeinfo_transient + VbeInfoBlock.VideoModePtr + 2]
                 mov     bx, word [cs:vbeinfo_transient + VbeInfoBlock.VideoModePtr]
-                mov     bp, mode_xlat
-                mov     si, di      ; конец mode_table
-                mov     di, (vbeinfo_transient + 512) ; modeinfo_transient
+                mov     bp, newint10end   ; modexlat start
+                mov     si, di            ; конец mode_table
+                mov     di, modeinfo_temp ; modeinfo_transient
                 
 @scan_loop:
                 mov     cx, [fs:bx] ; get mode number
@@ -1265,20 +1414,18 @@ hujak_info:
                 pushf
                 call    dword [int10ofs]
                 
-                mov     ax, [es:di + ModeInfoBlock.XResolution]
-                cmp     ax, 320
+                cmp     word [es:di + ModeInfoBlock.XResolution], 320
                 jnz     @scan_not_target    ; не наш клиент :)
-                mov     ax, [es:di + ModeInfoBlock.YResolution]
-                cmp     ax, 350
+                cmp     word [es:di + ModeInfoBlock.YResolution], 350
                 jae     @scan_not_target    ; не наш клиент :)
                 
                 ; add new mode to mode table and patch table
                 mov     word [ds:si    ], dx
-                mov     byte [ds:bp    ], dl
-                mov     byte [ds:bp + 1], cl
+                mov     word [ds:bp    ], dx
+                mov     word [ds:bp + 2], cx
                 inc     dx
                 add     si, 2
-                add     bp, 2
+                add     bp, 4
                 
 @scan_not_target:
                 jmp     @scan_loop
@@ -1287,13 +1434,28 @@ hujak_info:
                 ; add terminators to tables
                 mov     ax, 0xFFFF
                 mov     word [ds:si], ax
-                mov     byte [ds:bp], al
+                mov     word [ds:bp], ax
                 
+                ; set modetab pointer and append it to resident
                 add     si, 2
+                add     bp, 2
+                mov     [modetabptr], bp
+                ; SI - temp mode table end, BP - mode xlat end
+
+                mov     di, bp
+                mov     cx, si
+                mov     si, modetab_temp
+                sub     cx, si              ; calculate modetab length
+                shr     cx, 1
+                rep     movsw
+                
+                mov     si, di
+                
+                ; si - last resident address
                 ret
 ;----
 
-info_str        db      "S3 VBE fix TSR v.0.5.2 - by wbc\\bz7 19.o8.2o16"
+info_str        db      "S3 VBE fix TSR v.0.6.0 - by wbcbz7 o1.1o.2o22"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
 installed_str   db      "installed",13,10,13,10,"$"
@@ -1305,19 +1467,28 @@ notlast_str     db      "not last in chain",13,10,"$"
 notinst_str     db      "not installed$"
 nots3_str       db      "can't find S3 graphics card",13,10,"$"
 help_str        db      "help",13,10,13,10
-                db      "/B[+/-] - enable\disable banked VESA modes booster",13,10
-                db      "/D[x]   - force RAMDAC CLUT width (/D8 - normal, /D6 - force 6 bit)",13,10
                 db      "/M[x]   - override memory size in 64kb units (/M16 - 1 MB, /M0 - by BIOS)",13,10
+                db      "/V[x]   - force VBE version (/V102 - 1.2, /V200 - 2.0)",13,10
+                db      "/X[+/-] - add 320x400 and 320x480 VESA modes",13,10
+                db      "/P[+/-] - force max. 1 video page for every mode",13,10
                 db      "/S[x]   - 'set display start' mode",13,10
                 db      "          (/S0 - normal, /S1 - force wait for retrace, /S2 - force no wait)",13,10
-                db      "/R, /U  - release from memory",13,10,"$"
+                db      "/B[+/-] - enable/disable banked VESA modes booster (not Savage)",13,10
+                db      "/R, /U  - release from memory",13,10
+                db      13,10
+                db      "S3 Trio3D/Savage only:",13,10
+                db      "/D[x]   - force RAMDAC CLUT width (/D8 - normal, /D6 - force 6 bit)",13,10
+                db      "/G[+/-] - enable Hi/TrueColor gamma correction",13,10
+                db      "$"
 reset_flag      dw      0
 hw_flag         dw      0
 
-; some place for mode info block (will be used for initialization)
-vbeinfo_transient:
 ; некоторые временные переменные - будут переписаны vesa инфой
 memsize_temp    dw      ?
 sds_mask        dw      ?
-booster_temp    dw      ?
+booster_temp    db      ?
 cap_temp        db      ?
+gamma_temp      db      ?
+
+; some place for mode info block (will be used for initialization)
+vbeinfo_transient:
