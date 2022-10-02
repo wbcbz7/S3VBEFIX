@@ -190,6 +190,7 @@ int10seg    dw      ?
             call    patch_mode
             mov     [patchedmode], bx
             xchg    bx, cx
+            and     cx, 0x3FF       ; strip mode flags
             
 .f2:
             cmp     al, 0x2     ; Function 02h  - Set VBE Mode
@@ -228,7 +229,7 @@ sds_or      =       $-1
 sds_and     =       $-1
 
 @f9:
-            cmp     al, 0x9     ; Function 09h - Set/Get Palette        ; 0x3C 0x09
+            cmp     al, 0x9     ; Function 09h - Set/Get Palette
 f9_jmp:                         ; 0xEB -> 0x75 - enable pal procedure
             jmp     @invoke
             jmp     palproc
@@ -274,6 +275,8 @@ patchedmode dw      ?
             jz      patch_modeinfo
             cmp     al, 0x2     ; Function 02h - Set VBE Mode
             jz      patch_modeset
+            cmp     al, 0x3     ; Function 03h - Return Current VBE Mode
+            jz      patch_modeget
             cmp     al, 0x6     ; Function 06h - Set/Get Logical Scan Line Length
             jz      patch_setscanlinelen
 
@@ -599,6 +602,14 @@ gamma_en_skip:
             jmp     done_iret
 
             ; ----------------------------------
+            ; VESA function 0x3 patch
+patch_modeget:
+            mov     bx, [ss:bp + 6]
+            call    patch_mode
+            mov     [ss:bp + 6], bx
+            jmp     done_iret
+
+            ; ----------------------------------
             ; VESA function 0x5 new routine
 bankproc:
             push    cx
@@ -669,7 +680,7 @@ patch_setscanlinelen:
             jmp     done_iret
             
 ; ----------------------------------
-; replace current VESA mode number with other (used for mode info block patching)
+; replace current VESA mode number with other (used for mode info block patching), preserve mode flags
 ; input:  BX - VESA mode number; DS:SI - address of replacement table
 ; output: BX - patched mode number; SI destroyed          
 patch_mode:
@@ -1741,7 +1752,7 @@ get_hwinfo:
                 in      al, dx
                 dec     dx
                 cmp     al, ah
-                ;jz      .not_inst  ; comment for DOSbox hack here!
+                jz      .not_inst  ; comment for DOSbox hack here!
                 or      [hw_flag], 1
                 
                 ; check for crtc regs decoding
