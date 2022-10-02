@@ -100,8 +100,15 @@ PATCH_BIT_VBEVER    equ     (1 shl 5)
 PATCH_BIT_PAGELIMIT equ     (1 shl 6)
 PATCH_BIT_MODECAPS  equ     (1 shl 7)
 ; patch at install
+PATCH_BIT_INT6D     equ     (1 shl 13)
 PATCH_BIT_PALPROC   equ     (1 shl 14)
 PATCH_BIT_320X400   equ     (1 shl 15)
+
+; install check bitfields
+INSTALL_BIT_INT10       equ (1 shl 0)
+INSTALL_BIT_INT10LAST   equ (1 shl 1)
+INSTALL_BIT_INT6D       equ (1 shl 6)
+INSTALL_BIT_INT6DLAST   equ (1 shl 7)
 
 ; ---------------------------------------- START OF CODE ----------------------------
 
@@ -121,8 +128,8 @@ inTSR       dw      0           ; inner call check flag
             ; resident entry point
 newint10:
             ; check for inner call
-            cmp     [cs:inTSR], 1
-            jnz     @first_call
+            cmp     byte [cs:inTSR], 0
+            jz      @first_call
             ; here is a trick - since fasm doesn't support org as "move assembly
             ; pointer" we need to build our instruction "by hand"
             db      0xEA    ; jmp dword ?:?
@@ -215,10 +222,10 @@ int10seg    dw      ?
             cmp     al, 0x7     ; Function 07h - Set/Get Display Start
             jnz     @f9
             ; clear "wait for retrace" flag
-            db      0x82, 0xCB  ; or bl, ?
-sds_or      db      0x00
-            db      0x82, 0xE3  ; and bl, ?
-sds_and     db      0xFF
+            or      bl, 0
+sds_or      =       $-1
+            and     bl, 0xFF
+sds_and     =       $-1
 
 @f9:
             cmp     al, 0x9     ; Function 09h - Set/Get Palette        ; 0x3C 0x09
@@ -376,12 +383,10 @@ patch_modeinfo:
             mov     word [es:di + ModeInfoBlock.WinFuncPtr    ], bankproc
 
             ; patch mode capabilities
-            mov     ax, [es:di + ModeInfoBlock.ModeAttributes]
-            db      0x24    ; and al, ?
-modecaps_and    db  0xFF
-            db      0x0C   ; or al, ?
-modecaps_or db      0
-            mov     [es:di + ModeInfoBlock.ModeAttributes], ax
+            and     byte [es:di + ModeInfoBlock.ModeAttributes], 0xFF
+modecaps_and    =   $-1
+            or      byte [es:di + ModeInfoBlock.ModeAttributes], 0
+modecaps_or     =   $-1
 
             ; set LFB address
             xor     ax, ax
@@ -405,13 +410,11 @@ modecaps_or db      0
             
 .gamma_chk:
             ; check for gamma correction override
-            mov     al, [gamma_en]
-            test    al, al
+            cmp     byte [gamma_en], 0 
             jz      .skip_gamma
 
             ; check if direct color mode
-            mov     al, [es:di + ModeInfoBlock.MemoryModel]
-            cmp     al, 6
+            cmp     byte [es:di + ModeInfoBlock.MemoryModel], 6
             jnz     .skip_gamma
 
             ; indicate gamma correction support + reserved bits are unused
@@ -543,7 +546,7 @@ booster_lfb:
             ; as you may have noticed, before INT10 call, I set first banked mode, and then try to set LFB
             ; if the banked mode set call succeeds, the card is already initialized for the requested VESA
             ; mode, so it should technically work.
-            cmp     [modecaps_or], 0x80
+            cmp     byte [modecaps_or], 0x80
             jnz     booster_done
             mov     word [ss:bp + 8], 0x004F
 booster_done:
@@ -655,11 +658,10 @@ bankproc:
 
 patch_setscanlinelen:
             ; check for overriden memsize
-            mov     ax, [fakememsize] 
-            test    ax, ax
+            mov     dx, [fakememsize] 
+            test    dx, dx
             jz      done_iret
             
-            mov     dx, ax
             xor     ax, ax
             div     word [ss:bp+6]  ; out_bx = new bytes per scanline
             mov     [ss:bp+2], ax   ; ax     = new max number of scanlines
@@ -810,6 +812,7 @@ released_str    db      "released",13,10,"$"
 zap_str         db      8,8,8,"   ",13,10,"$"
 relfail_str     db      "unable to release - $"
 notlast_str     db      "not last in chain",13,10,"$"
+int6d_str       db      "int6d hooked",13,10,"$"
 notinst_str     db      "not installed$"
 nots3_str       db      "can't find S3 graphics card",13,10,"$"
 help_str        db      "help",13,10,13,10
@@ -823,6 +826,7 @@ help_str        db      "help",13,10,13,10
                 db      "/S[x]   - 'set display start' control",13,10
                 db      "          (/S0 - normal, /S1 - force wait for retrace, /S2 - force no wait)",13,10
                 db      "/B[+/-] - enable/disable banked VESA modes booster (not Savage)",13,10
+                db      "/I      - hook INT6D (disables release!)",13,10
                 db      "/R, /U  - release from memory",13,10
                 db      13,10
                 db      "S3 Trio3D/Savage only:",13,10
@@ -841,46 +845,16 @@ init:
                 mov     dx, info_str
                 int     0x21
                 
-                ; check for already installed
-                mov     ax, 0x3510
-                int     0x21                 ; get int10h vector
-                push    es
-                pop     gs
-                
-                ; installation check via int10
-                mov     ax, check_func
-                mov     dx, check_in
-                int     0x10
-                test    ax, ax
-                jnz     parse               ; not installed
-                cmp     dx, check_out
-                jnz     parse               ; not installed
-                
-                cmp     word [es:bx - (newint10 - newint10id) ], resident_id    ; check for signature
-                jnz     parse               ; NOT INSTALLED
-                cmp     word [es:bx - (newint10 - newint10ver)], resident_ver   ; check for version
-                jnz     parse               ; NOT INSTALLED!!!1 (arrrgh!)
-                
-                or      bp, 1               ; installed
-                ; check if our resident is last in chain
-                mov     ax, es
-                mov     cx, gs
-                cmp     ax, cx
-                jnz     parse
-                or      bp, 2               ; last in chain
+                ; check if INT6D hooked
+                mov     al, 0x6D
+                call    install_check
+                shl     bp, 6
+
+                ; check if INT10 hooked
+                mov     al, 0x10
+                call    install_check
+
 parse:
-                ; init temp variables
-                xor     ax, ax
-                mov     [memsize_temp], ax
-                mov     [vbever_temp], ax
-                mov     [booster_temp], al
-                mov     [gamma_temp], al
-                mov     ax, 0xFF00
-                mov     [sds_mask], ax
-                mov     [modecaps_temp], ax
-                mov     [cap_temp], ah
-                mov     [pagelimit_temp], 127
-                
                 ; parse command line
                 mov     si, 80h
                 lodsb
@@ -922,15 +896,18 @@ parse:
                 jz      fakememsize_parse
                 cmp     al, "S"             ; set display start flag
                 jz      sds_parse
-@gottaloop:     jcxz    no_params
-                loop    @parse_loop         ; else gotta loop
+                cmp     al, "I"             ; hook INT 0x6D
+                jz      int6d_parse
+@gottaloop:     
+                dec     cx
+                jcxz    no_params
+                jmp     @parse_loop         ; else gotta loop
 no_params:
                 jmp     build               ; empty or invalid commandline
                 
                 ; parse override memory size
 fakememsize_parse:
                 xor     ax, ax
-                dec     cx
                 jcxz    .done
                 
                 call    bcdhex
@@ -944,7 +921,6 @@ fakememsize_parse:
                 ; parse page limit
 pagelimit_parse:
                 xor     ax, ax
-                dec     cx
                 jcxz    .done
                 
                 call    bcdhex
@@ -961,7 +937,6 @@ pagelimit_parse:
                 ; parse force RAMDAC width
 dacwidth_parse:
                 xor     ax, ax
-                dec     cx
                 jcxz    .done
                 
                 call    bcdhex
@@ -978,7 +953,6 @@ dacwidth_parse:
                 ; parse VBE version override
 vbever_parse:
                 xor     ax, ax
-                dec     cx
                 jcxz    .done
 
                 call    hexhex
@@ -990,19 +964,20 @@ vbever_parse:
                 jmp     @gottaloop
 
 newmodes_parse:
-                dec     cx
                 or      [reset_flag], PATCH_BIT_320X400
                 jmp     @gottaloop
 
 palproc_parse:
-                dec     cx
                 or      [reset_flag], PATCH_BIT_PALPROC
+                jmp     @gottaloop
+
+int6d_parse:
+                or      [reset_flag], PATCH_BIT_INT6D
                 jmp     @gottaloop
 
                 ; parse set display start flag
 sds_parse:
                 xor     ax, ax
-                dec     cx
                 jcxz    .done
                 
                 call    bcdhex
@@ -1029,7 +1004,6 @@ sds_parse:
                 ; parse LFB control
 lfb_parse:
                 xor     ax, ax
-                dec     cx
                 jcxz    .done
                 
                 call    bcdhex
@@ -1055,21 +1029,17 @@ lfb_parse:
 
 booster_parse:
                 push    bx
-                push    di
                 mov     di, booster_temp
                 mov     bx, PATCH_BIT_BOOSTER
                 call    endis_parse
-                pop     di
                 pop     bx
                 jmp     @gottaloop
 
 gamma_parse:
                 push    bx
-                push    di
                 mov     di, gamma_temp
                 mov     bx, PATCH_BIT_GAMMA
                 call    endis_parse
-                pop     di
                 pop     bx
                 jmp     @gottaloop
 
@@ -1077,7 +1047,6 @@ endis_parse:
                 ; parse enable\disable
                 push    dx
                 mov     dx, 1               ; if param present - assume enabled
-                dec     cx
                 jcxz    .end                ; last param - assume that enabled
 .loop:
                 lodsb
@@ -1127,7 +1096,8 @@ build:
                 mov     [es:fetch_mask], ax
 .partdecode:    
 
-                jmp     install_done
+                mov     dx, si
+                int     27h
                 
 installed:
                 cmp     [reset_flag], 0
@@ -1138,17 +1108,14 @@ installed:
                 mov     dx, reset_str
                 int     21h
                 call    display_status
-                jmp     done
+                jmp     done_int20
                 
 already:        mov     dx, already_str
                 int     21h
                 mov     dx, installed_str
                 int     21h
                 call    display_status
-                jmp     done
-                
-install_done:   mov     dx, si
-                int     27h
+                jmp     done_int20
                 
                 
 ; SUBPROGRAMS
@@ -1303,7 +1270,6 @@ release:        mov     ah, 9                   ; remove us
                 ; now we should release memory, okay? :)
                 
                 mov     ah, 49h
-                int     21h
                 jmp     done
                 
 cant_release:   mov     dx, zap_str
@@ -1313,16 +1279,24 @@ cant_release:   mov     dx, zap_str
                 test    bp, bp
                 jz      notinst
                 
+                test    bp, INSTALL_BIT_INT6D
+                jz      .not_last
+
+                mov     dx, int6d_str
+                jmp     done
+
+.not_last:
                 mov     dx, notlast_str
-                int     21h
                 jmp     done
                 
 notinst:        mov     dx, notinst_str
                 int     21h
                 mov     dx, crlf
-                int     21h
+                
 
-done:           int     20h                  ; and now we can exit (yes!)
+done:           int     21h
+done_int20:
+                int     20h                  ; and now we can exit (yes!)
 ;----
 
 ; display help
@@ -1357,6 +1331,14 @@ install:
                 mov     ax, 2510h
                 mov     dx, newint10
                 int     21h
+
+                ; check if need to hook INT6D
+                test    [reset_flag], PATCH_BIT_INT6D
+                jz      .skip_int6d
+                mov     ax, 256Dh
+                mov     dx, newint10
+                int     21h
+.skip_int6d:
 	
                 ; free environment
                 mov     bx, [cs:2Ch]
@@ -1698,6 +1680,45 @@ dq_default      db      "default or none",13,10,"$"
 dq_custom       db      "custom",13,10,"$"
 
 ;----
+; installation check
+; input:  AL = interrupt
+; output: BP = install flags, ES:BX - S3VBEFIX resident copy entrypoint, CX - current ISR segment
+install_check:
+                mov     [.int], al
+                jmp     $+2                 ; pipeline flush
+                
+                ; check for already installed
+                mov     ah, 0x35
+                int     0x21                 ; get interrupt vector
+                push    es
+                pop     cx
+                
+                ; installation check
+                mov     ax, check_func
+                mov     dx, check_in
+                int     0x10
+.int            =       $-1
+
+                test    ax, ax
+                jnz     .ret                ; not installed
+                cmp     dx, check_out
+                jnz     .ret                ; not installed
+                cmp     word [es:bx - (newint10 - newint10id) ], resident_id    ; check for signature
+                jnz     .ret                ; NOT INSTALLED
+                cmp     word [es:bx - (newint10 - newint10ver)], resident_ver   ; check for version
+                jnz     .ret                ; NOT INSTALLED!!!1 (arrrgh!)
+
+                or      bp, INSTALL_BIT_INT10       ; installed
+
+                ; check if our resident is last in chain
+                mov     ax, es
+                cmp     ax, cx
+                jnz     parse
+                or      bp, INSTALL_BIT_INT10LAST   ; last in chain
+.ret:
+                ret
+
+;----
 ; check for hardware environment
 ; input/output: ?
 get_hwinfo:
@@ -1720,7 +1741,7 @@ get_hwinfo:
                 in      al, dx
                 dec     dx
                 cmp     al, ah
-                jz      .not_inst  ; comment for DOSbox hack here!
+                ;jz      .not_inst  ; comment for DOSbox hack here!
                 or      [hw_flag], 1
                 
                 ; check for crtc regs decoding
@@ -1897,14 +1918,15 @@ install_appendInfo:
 ; temp variables
 reset_flag      dw      0
 hw_flag         dw      0
-memsize_temp    dw      ?
-sds_mask        dw      ?
-booster_temp    db      ?
-cap_temp        db      ?
-gamma_temp      db      ?
-vbever_temp     dw      ?
-pagelimit_temp  dw      ?
-modecaps_temp   dw      ?
+memsize_temp    dw      0
+sds_mask        dw      0xFF00
+booster_temp    db      0
+cap_temp        db      0xFF
+gamma_temp      db      0
+vbever_temp     dw      0
+pagelimit_temp  dw      127
+modecaps_temp   dw      0xFF00
+
 
 ; some place for mode info block (will be used for initialization)
 vbeinfo_transient:
