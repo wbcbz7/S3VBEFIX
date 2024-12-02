@@ -1,8 +1,8 @@
 
  < logo placeholder >
 
-             S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.6.0
-         blah-blah copyleft (cl) 2o16-2o22 by Artem Vasilev - wbcbz7
+             S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.6.1
+         blah-blah copyleft (cl) 2o16-2o24 by Artem Vasilev - wbcbz7
  . _ _____________________________________________________________________ _ .
 
  0x0. disclaimer
@@ -118,6 +118,13 @@
     like linear modes it will work REALLY fast!
     Use /B[+/-] to enable/disable booster.
     NOTE: this feature does not work on S3 Savage cards!
+ 
+  - force 256k VRAM wraparound for VGA modes - some Vision864/868 Video BIOSes
+    do not enable wrapping for some reason, causing hardware scrolling bugs
+    and artifacts, i.e. in Commander Keen
+
+  - reset Attribute Controller flip-flop on mode set - fixing i.e. Kukoo 2
+    jerky scrolling 
 
     S3 Trio3D/Savage only features:
   - force RAMDAC CLUT width to 6 bit per channel (Trio3D and later)
@@ -278,4 +285,4 @@
 
  that's all! :)
 
- p.s MAKE FUN, NOT "SPECIAL OPERATIONS", fuck the useless putin's war!
+ p.s. make stuff and fun, fuck wars and world chaos (applies to everyone ;)

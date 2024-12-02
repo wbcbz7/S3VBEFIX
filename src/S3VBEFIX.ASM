@@ -14,7 +14,7 @@ struc VbeInfoBlock {
     .Capabilities        dd   ?           ; Capabilities of graphics cont.
     .VideoModePtr        dd   ?           ; Pointer to Video Mode List
     .TotalMemory         dw   ?           ; Number of 64kb memory blocks
-    
+
     ; Added for VBE 2.0
     .OemSoftwareRev      dw   ?           ; VBE implementation Software revision
     .OemVendorNamePtr    dd   ?           ; Pointer to Vendor Name String
@@ -24,7 +24,7 @@ struc VbeInfoBlock {
                                           ; scratch area
     .OemData             db   256 dup (?) ; Data Area for OEM Strings
 }
-    
+
 struc ModeInfoBlock {
      ; Mandatory information for all VBE revisions
     .ModeAttributes      dw ?      ; mode attributes
@@ -82,7 +82,7 @@ resident_ver        equ     0x0060   ; resident version, in 0x1234 - 12.3.4 form
 
 check_func          equ     0xCE00   ; installation check function number
 check_in            equ     "ne"     ; installation check key input  word
-check_out           equ     "ko"     ; installation check key output word 
+check_out           equ     "ko"     ; installation check key output word
 ; pretty nice (and simple) choice, eh? ^.^
 
 ; hacky stuff
@@ -116,7 +116,7 @@ start:
             org     0x100
             jmp     init
             nop
-        
+
             ; start of resident part
 realint10:
             org     resident_start
@@ -150,17 +150,13 @@ int10seg    dw      ?
             ; set TSR segment as data segment
             push    cs
             pop     ds
-            ; save original ax\bx\cx\dx
-            mov     [saveAX], ax
-            mov     [saveBX], bx
-            mov     [saveCX], cx
-            
+
             ; set inTSR flag
             inc     [inTSR]
-            
+
             ; check for calling function and doing some conditional branch magic
             ; should be used for patching arguments before INT10h call
-            
+
             cmp     ax, check_func  ; installaion check invoked
             jnz     .check_vbe
             cmp     dx, check_in
@@ -177,8 +173,13 @@ int10seg    dw      ?
             mov     dx, check_out
             mov     bx, newint10
             jmp     done_2
-            
-.check_vbe: 
+
+.check_vbe:
+            ; save original ax\bx\cx\dx
+            push    ax
+            push    bx
+            push    cx
+
             cmp     ah, 0x4F
             jnz     @invoke
 
@@ -187,16 +188,18 @@ int10seg    dw      ?
             jnz     .f2
             ; replace mode number
             xchg    bx, cx
+            mov     [patchedmode], bx
             call    patch_mode
             mov     [patchedmode], bx
             xchg    bx, cx
             and     cx, 0x3FF       ; strip mode flags
-            
+
 .f2:
             cmp     al, 0x2     ; Function 02h  - Set VBE Mode
             jnz     .f7
 
             ; replace mode number
+            mov     [patchedmode], bx
             call    patch_mode
             mov     [patchedmode], bx
 
@@ -212,29 +215,39 @@ int10seg    dw      ?
             call    dword [int10ofs]    ; call original handler
             test    ah, ah              ; check return status
             jz      .success
-            add     sp, 4               ; failure - don't bother with LFB mode set, return error
+.pop_ret:
+            add     sp, 4+6             ; failure - don't bother with LFB mode set, return error
             jmp     done_2
 .success:
             pop     bx
             pop     ax
             or      bh, 0x80            ; do LFB + noclear
-            
+
 .f7:
             cmp     al, 0x7     ; Function 07h - Set/Get Display Start
-            jnz     @f9
+            jnz     .fa
             ; clear "wait for retrace" flag
             or      bl, 0
 sds_or      =       $-1
             and     bl, 0xFF
 sds_and     =       $-1
 
+.fa:
+
 @f9:
             cmp     al, 0x9     ; Function 09h - Set/Get Palette
 f9_jmp:                         ; 0xEB -> 0x75 - enable pal procedure
             jmp     @invoke
             jmp     palproc
-            
+
+
+
 @invoke:
+            ; save patched mode on stack
+            jmp     short $+2       ; prefetch flush
+            push    word 0xCCCC
+patchedmode =       $-2
+
             ; call original handler
             pushf
             call    dword [int10ofs]
@@ -243,32 +256,41 @@ f9_jmp:                         ; 0xEB -> 0x75 - enable pal procedure
             push    bx
             push    cx
             push    dx
-            
+
             ; and once again this trick (fffuck!)
-            db      0xB8    ; mov ax, ?
-saveAX      dw      ?
-            db      0xBB    ; mov bx, ?
-saveBX      dw      ?
-            db      0xB9    ; mov cx, ?
-saveCX      dw      ?
-            db      0xBA    ; mov dx, ?
-patchedmode dw      ?
-            
+;            db      0xB8    ; mov ax, ?
+;saveAX      dw      ?
+;            db      0xBB    ; mov bx, ?
+;saveBX      dw      ?
+;            db      0xB9    ; mov cx, ?
+;saveCX      dw      ?
+;            db      0xBA    ; mov dx, ?
+;patchedmode dw      ?
+
             ; init stack frame
             push    bp
             mov     bp, sp
-            ; stack frame:   sp   - old_bp; 
-            ; sp+2 - out_dx; sp+4 - out_cx;
-            ; sp+6 - out_bx; sp+8 - out_ax;
+            ; stack frame:    sp    - old_bp;
+            ; sp+2  - out_dx; sp+4  - out_cx;
+            ; sp+6  - out_bx; sp+8  - out_ax;
+            ; sp+10 - patched_mode
+            ; sp+12 - in_cx ; sp+14 - in_bx ;
+            ; sp+16 - in_ax ;
+
+            ; load input registers
+            mov     ax, [ss:bp + 16]
+            mov     bx, [ss:bp + 14]
+            mov     cx, [ss:bp + 12]
+            mov     dx, [ss:bp + 10]
 
             ; check for VGA BIOS calls
             cmp     ah, 0
             jz      fix_fetch
-            
+
             ; check for VESA calls
             cmp     ah, 0x4F
             jnz     done_iret
-            
+
             cmp     al, 0x0     ; Function 00h - Return VBE Controller Information
             jz      patch_vbeinfo
             cmp     al, 0x1     ; Function 01h - Get VBE Mode Information
@@ -287,6 +309,7 @@ done_iret:
             pop     cx
             pop     bx
             pop     ax
+            add     sp, 8
 done_2:
             dec     [inTSR]
             pop     si
@@ -315,7 +338,7 @@ lock_extensions:
             mov     ax, 0x0039
             out     dx, ax
             ret
-            
+
 ; read-modify-write proc
 ; input:  dx - index port; al - index; bh - AND mask; bl - OR mask
 ; output: al - resulting value
@@ -328,23 +351,39 @@ rmw:
             out     dx, al
             dec     dx
             ret
-            
+
             ; ----------------------
-            ; VGA function 0x0 - fix primary stream FIFO fetch bug
+            ; VGA function 0x0 - fix primary stream FIFO fetch and 256kb memory wrap bugs
 fix_fetch:
+            and     al, 0x7F        ; strip "do not clear VRAM" flag
+            cmp     al, 0x13        ; clear FIFO fetch for standard VGA modes only
+            ja      done_iret
+
             mov     dx, 0x3D4
-            
+
             call    unlock_extensions
-            
+
+            ; fix primary stream FIFO fetch (trio64v2/dx, virge/dx, trio3d and higher)
             mov     al, 0x90
             db      0xBB    ; mov bx, ?
 fetch_mask  dw      0xFF00
             call    rmw
-            
+
+            ; force 256k memory wrap (805, vision 86x/96x)
+            mov     al, 0x32
+            mov     bx, 0xBF40
+            call    rmw
+
             call    lock_extensions
-            
+
+            ; do dummy read from Input Status Register (0x3DA) to reset
+            ; attribute controller index/data flip-flop
+            ; fixes Kukoo2 jerky scrolling
+            mov     dx, 0x3DA
+            in      al, dx
+
             jmp     done_iret
-            
+
             ; ----------------------
             ; VESA function 0x0 patch
 patch_vbeinfo:
@@ -370,15 +409,15 @@ patch_vbeinfo:
 cap_and     =       $-1
 
             ; override memory size
-            mov     ax, [fakememsize] 
+            mov     ax, [fakememsize]
             test    ax, ax
             jz      .memsize_skip
-            
+
             mov    [es:di + VbeInfoBlock.TotalMemory], ax
-        
+
 .memsize_skip:
             jmp     done_iret
-            
+
             ; ----------------------
             ; VESA function 0x1 patch
 patch_modeinfo:
@@ -400,20 +439,20 @@ modecaps_or     =   $-1
             ; check for modenum is patched
             cmp     cx, dx
             jz      .gamma_chk
-            
+
             ; double the pixel height
             shl     word [es:di + ModeInfoBlock.YResolution], 1
-            
+
             ; divide page number by two
             mov     al, [es:di + ModeInfoBlock.NumberOfImagePages]
             inc     al
             shr     al, 1
             dec     al
             mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
-            
+
 .gamma_chk:
             ; check for gamma correction override
-            cmp     byte [gamma_en], 0 
+            cmp     byte [gamma_en], 0
             jz      .skip_gamma
 
             ; check if direct color mode
@@ -432,23 +471,23 @@ modecaps_or     =   $-1
 
 .memsize_check:
             ; check for overriden memsize
-            mov     bx, [fakememsize] 
+            mov     bx, [fakememsize]
             test    bx, bx
             jz      .pagecount_check
-            
+
             mov     ax,  [es:di + ModeInfoBlock.BytesPerScanLine]
             mul     word [es:di + ModeInfoBlock.YResolution]        ; dx:ax - page size in bytes
             add     ax, 0xFFFF
             adc     dx, 0           ; ceil(dx:ax)
-            
+
             mov     cx, dx          ; cx    - pagesize in 64kb blocks (inaccurate but who cares? :)
             xor     dx, dx
             mov     ax, bx          ; dx:ax - mem size in 64kb blocks
             div     cx              ; ax    - number of pages
-            
+
             test    ax, ax          ; numofpages = 0?
             jz      .not_avail      ; mode is not available in fact
-            
+
 .pagecount_check:
             ; check for pagenum >= limit
             cmp     ax, [pagelimit]
@@ -460,25 +499,25 @@ modecaps_or     =   $-1
             dec     ax
             mov     [es:di + ModeInfoBlock.NumberOfImagePages], al
             jmp     done_iret
-            
+
 .not_avail:
             ; set "not supported" flag
             and     word [es:di + ModeInfoBlock.ModeAttributes], 0xFFFE
-            
+
             ; done
             jmp     done_iret
-            
+
             ; ----------------------
             ; VESA function 0x2 patch
 patch_modeset:
             ; check for modenum < 0x100
             cmp     bx, 0x100
             jb      fix_fetch
-            
+
             ; check for modenum is patched (== 320x400/480 mode)
             cmp     bx, dx
             jz      skip_doublescan_dis
-            
+
             ; set scanline height = 1
             push    bx
             mov     dx, 0x3D4
@@ -486,7 +525,7 @@ patch_modeset:
             mov     bx, 0x6000
             call    rmw
             pop     bx
-            
+
 skip_doublescan_dis:
             mov     dx, 0x3D4
             call    unlock_extensions
@@ -505,12 +544,12 @@ booster_en  db      0                   ; booster flag (nonzero - enabled)
             ; bank switching is enabled already, we need to just enable
             ; linear addressing via 64k window and set new linear window address
             ; сперто из SVGATRIX.TXT и перепилено чуток
-            
+
             ; set 64k window size and disable linear addressing
             mov     al, 0x58
             mov     bx, 0xEC00
             call    rmw
-            
+
             ; set 0xA0000 as linear window address
             xor     ax, ax
             mov     al, 0x59
@@ -518,12 +557,12 @@ booster_en  db      0                   ; booster flag (nonzero - enabled)
             inc     ax
             mov     ah, 0x0A
             out     dx, ax
-            
+
             ; enable linear addressing (костылек :)
             mov     al, 0x58
             mov     bx, 0xFF10
             call    rmw
-            
+
             jmp     booster_done
 
 booster_lfb:
@@ -531,7 +570,7 @@ booster_lfb:
             mov     al, 0x58
             mov     bx, 0xEC00
             call    rmw
-            
+
             mov     bx, [lfb_addr]
             mov     al, 0x59
             mov     ah, bh
@@ -539,12 +578,12 @@ booster_lfb:
             inc     ax
             mov     ah, bl
             out     dx, ax
-            
+
             mov     ah, [lfb_size]
             mov     al, 0x58
             or      ah, 0x10
             out     dx, ax
-            
+
             ; fake mode setting success if "force lfb" enabled
             ; as you may have noticed, before INT10 call, I set first banked mode, and then try to set LFB
             ; if the banked mode set call succeeds, the card is already initialized for the requested VESA
@@ -597,6 +636,11 @@ gamma_en    db      0x00
             out     dx, ax
 
 gamma_en_skip:
+            ; disable 256k wrap (safety measure for crappy video BIOSes)
+            mov     al, 0x32
+            mov     bx, 0xBF00
+            call    rmw
+
             mov     dx, 0x3D4
             call    lock_extensions
             jmp     done_iret
@@ -613,14 +657,14 @@ patch_modeget:
             ; VESA function 0x5 new routine
 bankproc:
             push    cx
-            
+
             test    bl, bl              ; check for selected window
             jnz     .fail               ; window B is not supported
 
             mov     cx, dx
             mov     dx, 0x3D4
             call    unlock_extensions
-            
+
             ; check for banking enabled
             mov     al, 0x31
             out     dx, al
@@ -629,18 +673,18 @@ bankproc:
             dec     dx
             test    al, 1
             jz      .lfb       ; not supported in VGA or LFB modes
-            
+
             mov     al, 0x6A
             ; check for get/set bank
             test    bh, bh
             jnz     .get
-            
+
             ; set new window pos
             mov     ah, cl
             out     dx, ax
             call    lock_extensions
             jmp     .ok
-            
+
 .get:
             out     dx, al
             inc     dx
@@ -648,7 +692,7 @@ bankproc:
             mov     cl, al      ; FIX: preserve read bank value across lock_extensions
             dec     dx
             call    lock_extensions
-            
+
 .ok:
             xor     dx, dx      ; FIX: return current bank in DX - fix chasm: the rift runtime error 216
             mov     dl, cl
@@ -741,9 +785,6 @@ palproc:
             push    si
             mov     ah, dl      ; save first palette index
 
-            ; bail out if CX==0
-            jcxz    .ok
-
             ; check if vsync requested
             test    bl, 0x80
             mov     dx, 0x3DA
@@ -760,7 +801,11 @@ palproc:
             jz      @B
 
 .skip_vsync:
-            mov     al, ah  ; restore saved start index
+            ; bail out if CX==0
+            jcxz    .ok
+
+            ; restore saved start index
+            mov     al, ah
             test    bl, 1
             jnz     .read
 
@@ -786,11 +831,11 @@ palproc:
             add     dl, 2
 @@:
             in      al, dx
-            mov     al, [es:di + 2]
+            mov     [es:di + 2], al
             in      al, dx
-            mov     al, [es:di + 1]
+            mov     [es:di + 1], al
             in      al, dx
-            mov     al, [es:di + 0]
+            mov     [es:di + 0], al
             add     di, 4
             loop    @b
 
@@ -814,7 +859,7 @@ newint10end:
 
 ; ---------------------
 ; strings
-info_str        db      "S3 VBE fix TSR v.0.6.0 - by wbcbz7 o2.1o.2o22"
+info_str        db      "S3 VBE fix TSR v.0.6.1 - by wbcbz7 o8.o6.2o24"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
 installed_str   db      "installed",13,10,13,10,"$"

@@ -1,9 +1,9 @@
 for english readme, please read README.TXT
 
- < logo placeholder >
+                           < logo placeholder >
 
-             S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.6.0
-         blah-blah copyleft (cl) 2o16-2o22 by Artem Vasilev - wbcbz7
+             S3VBEFIX - TSR fix for S3 VESA 2.0 BIOS v.0.6.1
+         blah-blah copyleft (cl) 2o16-2o24 by Artem Vasilev - wbcbz7
  . _ _____________________________________________________________________ _ .
 
  0x0. disclaimer
@@ -121,6 +121,13 @@ for english readme, please read README.TXT
    смысла включать бустер для VGA-режимов - можно поиметь проблемы с Mode-X.
    Включается\отключается ускоритель ключом /B[+\-].
    ВНИМАНИЕ: бустер НЕ работает на S3 Savage!
+
+ - перед установкой VGA-режимов принудительно форсится предел в 256кб VRAM,
+   некоторые видеобиосы, в частности от Vision864/868, забывают ставить его.
+   симптомы - мусор при аппаратном скроллинге, например в Commander Keen.
+
+ - сброс триггера индекс/данные для контроллера атрибутов во время установки
+   режима - фиксит скролл в Kukoo 2 и еще по мелочи
 
    следующие фичи - только для S3 Trio3D/Savage
  - установка разрядности палитры в RAMDAC (Trio3d и выше)
