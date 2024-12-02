@@ -146,6 +146,9 @@
     plus you can prepare custom gamma ramp (8 bit per channel) and upload it 
     just like regular VGA palette - refer to VBE spec for more info.
 
+  - starting from 0.6.1, save registers on stack on INT10 call to prevent
+    potential reentrancy issues inside S3VBEFIX
+
  that's all, read TODO.TXT in GitHub repo (in Russian, sorry :) for other info
 
  0x4. usage

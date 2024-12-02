@@ -859,7 +859,7 @@ newint10end:
 
 ; ---------------------
 ; strings
-info_str        db      "S3 VBE fix TSR v.0.6.1 - by wbcbz7 o8.o6.2o24"
+info_str        db      "S3 VBE fix TSR v.0.6.1 - by wbcbz7 o2.12.2o24"
 dash_str        db      " - $"                                      ; small trick here
 already_str     db      "already $"
 installed_str   db      "installed",13,10,13,10,"$"
